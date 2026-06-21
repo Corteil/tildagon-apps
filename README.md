@@ -1,44 +1,28 @@
 # Tildagon Apps
 
-A collection of apps for the [EMF Tildagon badge](https://tildagon.badge.emfcamp.org/)
-by [Brian Corteil](https://github.com/Corteil).
+An index of [EMF Tildagon badge](https://tildagon.badge.emfcamp.org/) apps by
+[Brian Corteil](https://github.com/Corteil).
+
+The Tildagon app store discovers one app per repository (it reads `tildagon.toml`
+from the repo root), so each published app lives in its own repo. This repo is a
+landing page that links to them.
 
 ## Apps
 
-| App | Description |
-|-----|-------------|
-| [GPS Info](gps-info/) | GPS status, satellite count and a sky map of the satellites in view, for the GPS Hexpansion. Round-screen UI with an LED status ring. |
+| App | Repo | App store | Description |
+|-----|------|-----------|-------------|
+| **GPS Info** | [tildagon-gps-info](https://github.com/Corteil/tildagon-gps-info) | [directory](https://apps.badge.emfcamp.org/) | GPS status, satellite count and a sky map of the satellites in view, for the GPS Hexpansion. Round-screen UI with an LED status ring. |
 
-## Installing an app
+## Publishing notes
 
-Each app is a folder. The Tildagon launcher loads an app as `apps.<folder>.app`
-and reads its menu name from `metadata.json`, so an app must be installed as a
-**folder** on the badge (a bare `.mpy` file will not load).
+To get an app into the [app store](https://apps.badge.emfcamp.org/):
 
-Pre-built `.mpy` files are committed, so you can flash without `mpy-cross`. Find
-the badge's serial port with `mpremote devs` (substitute it for `COM13` below):
+1. App in its own public repo with `app.py` + `tildagon.toml` **at the root**.
+2. Add the **`tildagon-app`** topic to the repo.
+3. Create a **GitHub release** (e.g. `v0.0.1`).
+4. The store auto-discovers it within ~15 minutes.
 
-```powershell
-# from an app folder, e.g. gps-info
-mpremote connect COM13 fs mkdir :/apps/gps_info ^
-  + fs cp app.mpy       :/apps/gps_info/app.mpy ^
-  + fs cp metadata.json :/apps/gps_info/metadata.json ^
-  + fs cp tildagon.toml :/apps/gps_info/tildagon.toml
-```
-
-To rebuild from source:
-
-```powershell
-pip install mpy-cross
-python -m mpy_cross app.py
-```
-
-See each app's own `README.md` for app-specific steps (e.g. GPS Info also needs
-the GPS Hexpansion firmware flashing — see [gps-info/README.md](gps-info/README.md)).
-
-## Requirements
-
-* **Tildagon OS v2.0.0+** for apps that use hexpansion discovery.
+See the [publish docs](https://tildagon.badge.emfcamp.org/tildagon-apps/publish/).
 
 ## Credits
 
