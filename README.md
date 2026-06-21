@@ -12,6 +12,7 @@ landing page that links to them.
 | App | Repo | App store | Description |
 |-----|------|-----------|-------------|
 | **GPS Info** | [tildagon-gps-info](https://github.com/Corteil/tildagon-gps-info) | [directory](https://apps.badge.emfcamp.org/) | GPS status, satellite count and a sky map of the satellites in view, for the GPS Hexpansion. Round-screen UI with an LED status ring. |
+| **GPS Clock** | [tildagon-gps-clock](https://github.com/Corteil/tildagon-gps-clock) | [directory](https://apps.badge.emfcamp.org/) | Retro multi-face GPS watch: analog, digital (Indiglo-style), sun/moon and tide. Offline tide-clock plus live UK tide levels from the Environment Agency. |
 
 ## Publishing notes
 
