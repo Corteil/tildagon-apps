@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+bin/
+lib/
+*.egg-info/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Note: app .mpy build artifacts ARE committed on purpose, so apps can be
+# flashed without mpy-cross. Scratch/dev artifacts below are not.
+_test_*.py
+*_O3.mpy
+preview-channel.bin
+merged-firmware.bin
