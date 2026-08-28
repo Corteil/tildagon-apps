@@ -66,16 +66,44 @@ Source: `hexpansion/hexpansion.kicad_sch` + `tildagon.pretty/hexpansion-edge-con
 * **HEXP_DET** has a weak pull-up on the badge; we tie it to GND. That is what makes
   the badge power the port at all.
 
-### 1.3 Mechanical
+### 1.3 Mechanical — the hexagon, and how much of it we get
 
-* Template outline: **32.0 × 36.6 mm** overall, including the 6.25 mm × 12 mm insertion tab.
+**The hexpansion is a regular hexagon, 32 mm across flats, with the insertion tab on one
+flat.** From `hexpansion.kicad_pcb`: vertices at (0, 9.66), (16, 0), (32, 9.66),
+(32, 26.98), (16, 36.64), (0, 26.98), tab tip at x = 0 spanning y = 12.07–24.57.
+
+That means **each flat is only ~18.5 mm long** (side = W/√3 for a hexagon of width W).
+This is the number that governs the whole physical design, and it is much smaller than
+the 32 mm bounding-box width suggests.
+
 * **Board thickness 1.0 mm** (template stackup is 0.91 mm core + 2×35 µm Cu ≈ 0.98 mm).
-  This is not negotiable — the badge's SFP-style receptacle expects a 1.0 mm card edge.
+  Not negotiable — the badge's SFP-style receptacle expects a 1.0 mm card edge.
 * **ENIG only. HASL is explicitly forbidden** — the pads must be flat to make contact.
-* Two M2 mounting-hole pads, which is what will take the strain of a hanging HDMI cable.
-* **The hexpansion forms one segment of the badge's hexagon**, so its two side edges are
-  flanked by neighbouring hexpansions. **Only the outer edge is available for
-  connectors.** This turns out to be the binding constraint on the design (§4.4).
+* Two M2 mounting-hole pads, which is what will take the strain of a hanging cable.
+
+#### How big can a hexpansion be?
+
+From `tildagon-base.kicad_pcb`, the six SFP connectors sit at **radius 26.075 mm** from
+the badge centre, 60° apart. For a hexpansion of width `W` across flats, the tile centre
+is at `R = 26.075 + W/2`, and two adjacent tile centres are `D = 2·R·sin(30°) = R` apart.
+Two hexagons of width `W` touch when `D = W`, so:
+
+> **gap between neighbouring hexpansions = 26.075 − W/2 mm**
+
+| W across flats | Flat length | Area | Gap to neighbours |
+|---------------:|------------:|-----:|------------------:|
+| 32 (template) | 18.5 mm | 8.9 cm² | 10.1 mm |
+| 40 | 23.1 mm | 13.9 cm² | 6.1 mm |
+| **44 (chosen)** | **25.4 mm** | **16.8 cm²** | **4.1 mm** |
+| 48 | 27.7 mm | 20.0 cm² | 2.1 mm |
+| 52.2 | 30.1 mm | 23.6 cm² | 0 — touching |
+
+This assumes the tab tip sits at the connector footprint origin. Insertion depth puts the
+tab-side flat a millimetre or two further out, which makes `R` larger and the real gaps
+slightly **bigger** than the table says — so these figures are conservative.
+
+Five of the six flats are free. The two flanking the tab are effectively unusable (they
+face the badge), leaving **the outer flat and the two adjoining it** — see §4.4.
 
 ### 1.4 The EEPROM contract
 
@@ -115,8 +143,8 @@ A hexpansion that:
 
 1. Outputs **DVI/HDMI** from the RP2350's HSTX peripheral, on a **mini-HDMI (Type C)**
    receptacle.
-2. Carries **16 MB QSPI flash** (boot + sprite/font/asset storage) and **8 MB QSPI PSRAM**
-   (framebuffers, off-screen surfaces).
+2. Carries **16 MB QSPI flash** (boot + sprite/font/asset storage), **8 MB QSPI PSRAM**
+   (framebuffers, off-screen surfaces) and a **microSD socket** for bulk assets.
 3. **Emulates the identification EEPROM** at `0x50` in RP2350 firmware, serving a 64 KiB
    LittleFS image that contains the badge-side MicroPython driver app. The RP2350 owns
    that image, so the driver updates itself with the hexpansion firmware — no separate
@@ -127,6 +155,8 @@ A hexpansion that:
    connector** for a Raspberry Pi Debug Probe.
 6. Exposes **two Qwiic / STEMMA QT sockets** on their own I2C bus, which the badge can
    also reach through the GFX card as an I2C bridge.
+7. Is built on a **44 mm across-flats hexagon** rather than the 32 mm template — the
+   smallest size at which the connectors actually fit (§4.4).
 
 The badge stays the computer. This is a graphics *card*, not a co-processor that does
 the badge's job for it.
@@ -174,9 +204,9 @@ Ship v1 on the first row. Everything else is a firmware update.
 ## 4. Hardware architecture
 
 ```
-      ┌──────────── hexpansion edge connector (1.0 mm, ENIG) ────────────┐
-      │  +3V3 (600 mA)   SDA/SCL   HS_F..HS_I   LS_A..LS_E   DET→GND     │
-      └───┬──────────────┬───────────┬────────────┬──────────────────────┘
+      ┌─────────── hexpansion edge connector (1.0 mm, ENIG) ───────────┐
+      │  +3V3 (600 mA)   SDA/SCL   HS_F..HS_I   LS_A..LS_E   DET→GND   │
+      └───┬──────────────┬───────────┬────────────┬────────────────────┘
           │              │           │            │
      ┌────▼────┐   ┌─────▼─────┐ ┌───▼────┐  ┌────▼─────┐
      │ bulk +  │   │ I2C0      │ │ SPI0   │  │ RUN /    │
@@ -191,30 +221,37 @@ Ship v1 on the first row. Everything else is a firmware update.
   │ 3V3→5V, 55 mA │          │   QFN-60       │  CS0   └──────────────┘
   └───────┬───────┘          │  L1 3.3 µH     │        ┌──────────────┐
           │                  │  Y1 12 MHz     │◄──QSPI─┤ APS6404 8 MB │
-          │                  └─┬────┬────┬──┬─┘  CS1   └──────────────┘
-          │      HSTX 12–19    │    │    │  │ SWD
-          │              ┌─────▼─┐  │    │  └────────► J3  3-pin debug (JST-SH)
-          │              │2× ESD │  │    │              SWCLK · GND · SWDIO
-          │              │arrays │  │    └───I2C1 10/11──► J4,J5 Qwiic ×2
-          │              └─────┬─┘  │                      (4k7 pull-ups, jumper)
-          │                    │    └──PIO I2C 6/7──► PCA9306 ──► DDC/EDID
-          └───────── +5V ──────┴──────────────────────────────► J1 mini-HDMI (C)
+          │                  └─┬──┬──┬──┬──┬──┘  CS1   └──────────────┘
+          │      HSTX 12–19    │  │  │  │  │ SWD
+          │             ┌──────▼┐ │  │  │  └──────► J3  3-pin JST-SH debug
+          │             │2× ESD │ │  │  │           SWCLK · GND · SWDIO
+          │             │arrays │ │  │  └─SPI1 8–11─► microSD  (J6)
+          │             └──────┬┘ │  └────I2C1 6/7──► J4,J5 Qwiic ×2
+          │                    │  │                   4k7 pull-ups on jumper
+          │                    │  └─PIO I2C 3/4────► PCA9306 ──► DDC / EDID
+          └──────── +5V ───────┴─────────────────────────────► J1 mini-HDMI (C)
 
-  J2 USB-C ──► power OR-ing (Q1/Q2) + USB D±  ·  SW1 BOOT  ·  SW2 RESET
-  LED1 power (always on)  ·  LED2 status (GPIO1)  ·  LED3 SK6805 RGB
+  J2 USB-C ─► power OR-ing (Q1/Q2) + USB D±   SW1 BOOT   SW2 RESET
+  LED1 power (always on)   LED2 status (GPIO1)   LED3 SK6805 RGB
+
+  Flats:  outer = J1 + J2   ·   side A = J4 + J5   ·   side B = J6
 ```
 
 ### 4.1 RP2350A pin budget (30 GPIO, QFN-60)
 
-| GPIO | Function |
+Every peripheral group below was checked against the RP2350's pin-mux tables — SPI0/SPI1
+and I2C0/I2C1 can only appear on fixed pin groups, and that, not pin count, is what
+constrains this map.
+
+| Pin | Function |
 |------|----------|
 | 0 | PSRAM chip select (QMI CS1 — GPIO0/8/19 are the only options on RP2350A, and 19 is taken by HSTX) |
 | 1 | Status LED (LED2) |
 | 2 | HDMI hot-plug detect, via 100k/100k divider from +5 V |
-| 3–5 | Spare, brought to test pads |
-| 6, 7 | DDC/EDID via **PIO I2C** through the PCA9306 level shifter |
-| 8, 9 | UART0 test points |
-| 10, 11 | **I2C1 (hardware) → Qwiic sockets J4/J5** |
+| 3, 4 | DDC/EDID via **PIO I2C** through the PCA9306 level shifter |
+| 5 | microSD card-detect |
+| 6, 7 | **I2C1 (hardware) → Qwiic sockets J4/J5** |
+| 8–11 | **SPI1 → microSD** (8 MISO, 9 CS, 10 SCK, 11 MOSI) |
 | **12–19** | **HSTX → 4 TMDS pairs (clock + 3 data)** — fixed by silicon |
 | 20–23 | SPI0 slave ↔ HS_F(SCK) / HS_G(MOSI) / HS_H(MISO) / HS_I(CS) |
 | 24, 25 | I2C0 target ↔ badge SDA / SCL (the emulated EEPROM) |
@@ -228,6 +265,12 @@ Ship v1 on the first row. Everything else is a firmware update.
 
 Note the mapping trades JTAG on port 1 (GPIO39–42 are the ESP32's JTAG pins) — use
 port 2 or 6 during badge-side debugging.
+
+**Why the SD card forced a reshuffle.** SPI0 is already the badge slave on GPIO20–23, so
+the card needs SPI1 — whose only groups are {8,9,10,11}, {12–15} and {24–27}. HSTX owns
+12–19 and the badge I2C target owns 24/25, so **{8,9,10,11} is the only possibility**.
+That displaced the Qwiic bus to I2C1 on GPIO6/7 and DDC to a PIO I2C on GPIO3/4. The one
+casualty is the UART0 test points, which were already redundant with the USB CDC console.
 
 **Why Qwiic gets the hardware I2C and DDC gets PIO:** user-attached Qwiic devices are the
 unpredictable ones — arbitrary addresses, arbitrary clock stretching, arbitrary bus
@@ -247,7 +290,7 @@ guaranteed: monitor EDID EEPROMs live at 0x50, and so do plenty of Qwiic boards.
 | LED1 | Power — always on when the rail is up. High-efficiency part on 4k7, ~0.4 mA |
 | LED2 | Status/user, GPIO1 |
 | LED3 | SK6805 RGB, optional |
-| GPIO8/9 | UART0 test points, redundant with USB CDC but free |
+| GPIO3 test pads | Spare, brought out for bring-up probing |
 
 Three independent ways in — USB, SWD, and the badge's own RUN control — means there is no
 plausible state this board gets into that you cannot recover from.
@@ -263,29 +306,44 @@ Budget roughly **100 mA** of the port's headroom for attached devices (§4.5 lea
 that). A Qwiic device that pulls more than that will trip the badge's port switch, not
 ours — worth a line in the user documentation.
 
-### 4.4 Outer-edge budget — the binding constraint
+### 4.4 Flat allocation — the real mechanical problem
 
-Only the outer edge is available (§1.3), and it is about 32 mm wide:
+At the template's 32 mm the outer flat is 18.5 mm and **mini-HDMI + USB-C do not fit on
+it** (19.5 mm of connector body before margins). Growing the board to **44 mm across
+flats** gives a 25.4 mm flat and makes the layout work:
 
-| Connector | Width |
-|-----------|------:|
-| J1 mini-HDMI Type C | 10.5 mm |
-| J2 USB-C 16P | 9.0 mm |
-| J4 Qwiic, edge-mounted | 6.2 mm |
-| 3 × inter-connector gap | ~4.5 mm |
-| **Total** | **~30.2 mm of ~32 mm** |
+| Flat | Contents | Used |
+|------|----------|-----:|
+| **Outer** (opposite the tab) | J1 mini-HDMI 10.5 + J2 USB-C 9.0, ~2 mm margins | 25.5 of 25.4 mm |
+| **Side A** | J4 + J5 Qwiic, 6.2 each | 18.4 of 25.4 mm |
+| **Side B** | microSD socket, ~15 mm | 19.0 of 25.4 mm |
+| Two tab-side flats | Face the badge — unusable | — |
 
-That closes, but with almost nothing spare. So:
+Fat-cable connectors have to be on the outer flat: with a 4.1 mm gap to the neighbouring
+hexpansion, a USB-C or HDMI plug body simply will not fit beside a side flat. JST-SH
+Qwiic cables (~4–5 mm wide, thin and flexible) are borderline in that gap and fine when
+the adjacent bay is empty, which is the common case. Same for the SD slot: card insertion
+needs finger room that a populated neighbouring bay does not leave.
 
-* **J5, the second Qwiic socket, is top-mounted just inboard of the edge**, cable exiting
-  upward. It consumes no edge width.
-* **J3 (SWD) and the buttons go on the top face**, not the edge.
-* If Phase 1 layout shows the outer edge does not close, **J5 becomes unpopulated pads
-  and J4 keeps the socket** — one Qwiic port, chaining via a header. That is the fallback,
-  and it costs nothing to design in now.
+Two things to be honest about:
 
-This is also what kills microSD: GPIO3–5 leaves only three spare pins where SPI SD needs
-four, and there is no edge or face space left for the socket. Dropped from v1.
+* **The outer flat closes with no slack** — 25.5 mm of connector-plus-margin on a 25.4 mm
+  flat. It works with ~1.9 mm end margins and 2 mm between connectors, and the corner
+  radii give a little back, but this is a placement study, not an assumption.
+* **microSD is the first thing to cut** if the layout fights back. With 16 MB of flash and
+  a USB-C port for loading assets, it is a convenience, not a requirement.
+
+#### If you want real slack: a radial wedge instead of a hexagon
+
+The 60° sectors diverge, so available width grows with radius: at radius `r` from the badge
+centre a shape can be about `r` wide (half-width `r·sin 30° = r/2` each side) before it
+fouls its neighbours. Keeping the tab-end profile of the template hexagon and flaring out
+to `r ≈ 70 mm` gives roughly a **60 mm outer edge** — everything on one face with room
+to spare, for about the same radial extent as the 44 mm hexagon.
+
+The costs are that it stops looking like a Tildagon hexagon, and more mass hangs off a
+1.0 mm card edge and two M2 screws. **Recommendation: build the 44 mm hexagon; hold the
+wedge in reserve for if the outer-flat placement study fails.**
 
 ### 4.5 Points that need care
 
@@ -316,10 +374,11 @@ four, and there is no edge or face space left for the socket. Dropped from v1.
 | PSRAM active | 30 mA |
 | Flash (bursty) | 15 mA |
 | HDMI +5 V @55 mA through boost (85% eff.) | 98 mA |
+| microSD during transfers (bursty, idle ≈ 0.2 mA) | 50 mA |
 | Level shifter, LEDs, misc | 11 mA |
-| **Total typical, no Qwiic devices** | **~264 mA** |
-| **Peak** | **~350 mA** |
-| Headroom left for attached Qwiic devices | ~100 mA |
+| **Total typical, SD idle, no Qwiic devices** | **~264 mA** |
+| **Peak, SD streaming** | **~400 mA** |
+| Headroom left for attached Qwiic devices | ~100 mA (shared with SD bursts) |
 
 Comfortably inside 600 mA — but ~0.9 W is a real load on a badge battery. Expect
 **2–3 hours** of badge runtime with the GFX card live on badge power alone. With USB-C
@@ -375,6 +434,7 @@ they move constantly and the RP2350A in particular has swung between $1.03 and $
 | 9 | J2 | USB-C 16P receptacle (power + UF2 + CDC) | SMD | 1 | 0.30 | 0.24 |
 | 10 | J3 | **JST-SH 3-pin, RPi debug standard** (SM03B-SRSS-TB) | SMD | 1 | 0.12 | 0.10 |
 | 11 | J4,J5 | **JST-SH 4-pin Qwiic** (SM04B-SRSS-TB) | SMD | 2 | 0.26 | 0.22 |
+| 11b | J6 | **microSD socket, push-push** | SMD | 1 | 0.35 | 0.30 |
 | 12 | D1 | USBLC6-2SC6 USB ESD | SOT-23-6 | 1 | 0.10 | 0.08 |
 | 13 | Q1,Q2 | AO3401 P-FET, supply OR-ing | SOT-23 | 2 | 0.12 | 0.10 |
 | 14 | Y1 | 12 MHz crystal, ±30 ppm | 3225 | 1 | 0.16 | 0.13 |
@@ -382,11 +442,11 @@ they move constantly and the RP2350A in particular has swung between $1.03 and $
 | 16 | L2 | 2.2 µH shielded (boost) | 0805 | 1 | 0.09 | 0.07 |
 | 17 | FB1,FB2 | Ferrite bead 600 Ω @100 MHz | 0402 | 2 | 0.04 | 0.03 |
 | 18 | C | 22 µF bulk / 10 µF / 1 µF / 100 nF / 15 pF | 0805–0402 | 30 | 0.30 | 0.23 |
-| 19 | R | Pulls, dividers, Qwiic 4k7, LED resistors | 0402 | 22 | 0.07 | 0.04 |
+| 19 | R | Pulls, dividers, Qwiic 4k7, SD pulls, LED resistors | 0402 | 24 | 0.08 | 0.05 |
 | 20 | SW1,SW2 | **Tactile switches — BOOT and RESET** | 3×2 mm | 2 | 0.12 | 0.10 |
 | 21 | LED1,LED2 | **Power (always on) + status** | 0603 | 2 | 0.04 | 0.04 |
 | 22 | LED3 | SK6805 RGB status | 2427 | 1 | 0.08 | 0.06 |
-| | | **Total parts / board** | | **77 placements** | **$7.98** | **$6.64** |
+| | | **Total parts / board** | | **79 placements** | **$8.35** | **$6.95** |
 
 Machine-readable version: [`bom.csv`](bom.csv).
 
@@ -406,54 +466,70 @@ Component-level notes:
 
 Turnkey PCBA at JLCPCB, delivered to the UK. Fee structure from JLCPCB's published
 rates (setup ≈ $8/side, feeder ≈ $1.50 per extended part type, stencil ≈ $1.50,
-SMT labour ≈ $0.0017/joint with a $0.48/board floor). Board is 32 × 36.6 mm,
-4-layer, 1.0 mm, ENIG, impedance-controlled, ~315 solder joints, ~16 extended part
-types, **double-sided assembly**.
+SMT labour ≈ $0.0017/joint with a $0.48/board floor). Board is a **44 mm across-flats
+hexagon** (44 × 50.8 mm bounding box, 16.8 cm²), 4-layer, 1.0 mm, ENIG,
+impedance-controlled, ~330 solder joints, ~17 extended part types,
+**double-sided assembly**.
 
 | Line | 10 boards | 20 boards | 50 boards |
 |------|----------:|----------:|----------:|
-| PCB fab (4L, 1.0 mm, ENIG, imp. ctrl) | $28 | $42 | $80 |
+| PCB fab (4L, 1.0 mm, ENIG, imp. ctrl) | $42 | $64 | $135 |
 | Stencils (2 sides) | $3 | $3 | $3 |
 | SMT setup (2 sides) | $16 | $16 | $16 |
-| Feeder fees (~16 extended parts) | $24 | $24 | $24 |
-| SMT labour | $5 | $11 | $27 |
+| Feeder fees (~17 extended parts) | $26 | $26 | $26 |
+| SMT labour | $6 | $11 | $28 |
 | X-ray (QFN-60) contingency | $10 | $10 | $10 |
-| Components (incl. MOQ overshoot) | $104 | $175 | $349 |
-| **Subtotal, ex-works** | **$190** | **$281** | **$509** |
-| Air freight to UK | $22 | $25 | $32 |
-| UK import VAT @20% | $42 | $61 | $108 |
+| Components (incl. MOQ overshoot) | $109 | $183 | $365 |
+| **Subtotal, ex-works** | **$212** | **$313** | **$583** |
+| Air freight to UK | $24 | $28 | $38 |
+| UK import VAT @20% | $47 | $68 | $124 |
 | Courier disbursement fee | $15 | $15 | $15 |
-| **Delivered total** | **$269** | **$382** | **$664** |
-| **Per board** | **$26.90** | **$19.10** | **$13.28** |
-| *Per board, £ @1.27* | *£21.18* | *£15.04* | *£10.46* |
+| **Delivered total** | **$298** | **$424** | **$760** |
+| **Per board** | **$29.80** | **$21.20** | **$15.20** |
+| *Per board, £ @1.27* | *£23.46* | *£16.69* | *£11.97* |
 
-The shape of that curve is the whole story: **$53 of the cost is fixed** (setup, feeders,
-stencils, X-ray) regardless of quantity. At 10 boards you pay $5.30/board just to turn the
-machine on; at 50 it is $1.06. If there is any chance of wanting 50, order 50.
+### What the bigger board actually cost
+
+| | 32 mm hexagon | 44 mm hexagon | Delta |
+|---|---:|---:|---:|
+| Area | 8.9 cm² | 16.8 cm² | +89% |
+| 10 boards, per board | $26.90 | $29.80 | +$2.90 |
+| 20 boards, per board | $19.10 | $21.20 | +$2.10 |
+| 50 boards, per board | $13.28 | $15.20 | +$1.92 |
+
+**Roughly two dollars a board to nearly double the area, and it is what makes the
+connectors fit at all.** Take the space. PCB fabrication is only 14–18% of the run cost,
+so board area is one of the cheapest things you can spend on here — far cheaper than a
+respin caused by a placement that would not close.
+
+The shape of the cost curve is otherwise unchanged: **$55 of the cost is fixed** (setup,
+feeders, stencils, X-ray) regardless of quantity. At 10 boards you pay $5.50/board just to
+turn the machine on; at 50 it is $1.10. If there is any chance of wanting 50, order 50.
 
 ### One-off NRE, not included above
 
 | Item | Est. |
 |------|-----:|
-| 5-board prototype spin (same process) | $185 |
-| Second spin, assume one is needed | $185 |
+| 5-board prototype spin (same process) | $210 |
+| Second spin, assume one is needed | $210 |
 | Raspberry Pi Debug Probe, mini-HDMI cable, test monitor, M2 hardware | $55 |
-| **Total NRE** | **~$425** |
+| **Total NRE** | **~$475** |
 
-Fully loaded, a 50-board run lands at roughly **$22/board**; a 20-board run at
-**$40/board**.
+Fully loaded, a 50-board run lands at roughly **$25/board**; a 20-board run at
+**$44/board**.
 
 ### Should you hand-assemble instead?
 
 | | 10 boards | 50 boards |
 |---|---:|---:|
-| Turnkey PCBA, delivered | $269 | $664 |
-| PCB + parts + own reflow, delivered | ~$212 | ~$580 |
-| Saving | $57 | $84 |
+| Turnkey PCBA, delivered | $298 | $760 |
+| PCB + parts + own reflow, delivered | ~$237 | ~$673 |
+| Saving | $61 | $87 |
 | Your time | ~9 h | ~34 h |
 
 **No.** You would be buying your own labour at under $3/hour to hand-place a 0.4 mm-pitch
-QFN-60, an HDMI shell and three JST-SH connectors, with yield risk on top. Use turnkey.
+QFN-60, an HDMI shell, a microSD cage and three JST-SH connectors, with yield risk on top.
+Use turnkey.
 
 ### Other vendors
 
@@ -494,9 +570,10 @@ holes are right by construction. 4-layer stackup: L1 signal/TMDS, L2 solid GND, 
 power, L4 signal. Length-match TMDS pairs, keep them on L1 over the L2 ground plane, and
 keep the runs under ~30 mm (which the board size makes easy).
 
-**Do the outer-edge placement study first** (§4.4) — mini-HDMI, USB-C and one Qwiic
-socket use ~30 mm of ~32 mm, so connector placement, not routing, is what will decide
-whether this board closes. Request VID/PID in week 1.
+**Do the flat-allocation placement study first** (§4.4) — the outer flat carries
+mini-HDMI plus USB-C at 25.5 mm on a 25.4 mm flat, so connector placement, not routing,
+is what decides whether this board closes. If it does not, either drop microSD and move
+USB-C to a side flat, or switch to the radial wedge outline. Request VID/PID in week 1.
 
 ### Phase 2 — Prototype run (5 boards, ~2 weeks lead time)
 
@@ -505,7 +582,7 @@ whether this board closes. Request VID/PID in week 1.
 Pico SDK in C. Order of work: boot + flash/PSRAM bring-up → I2C target and EEPROM
 emulation → HSTX DVI output → SPI slave with DMA (PIO-based, so clock-stretch and
 back-pressure are under our control) → the drawing engine → PIO-I2C DDC/EDID and mode
-negotiation → Qwiic bus and the I2C bridge commands → HDMI audio if time allows.
+negotiation → Qwiic bus and the I2C bridge commands → microSD → HDMI audio if time allows.
 
 ### Phase 4 — Badge-side driver (1–2 weeks)
 
@@ -522,12 +599,13 @@ yet.
 | # | Risk | Severity | Mitigation |
 |--:|------|----------|------------|
 | 1 | EEPROM emulation loses the enumeration race at power-on | **High** | Fast-boot I2C target; clock stretching; DNP 24C64 fallback footprint. Proven or disproven in Phase 0. |
-| 2 | Outer edge does not close — ~30 mm of connectors on ~32 mm | **High** | Placement study first in Phase 1; J5 top-mounted; fallback is J5 unpopulated with a header. |
+| 2 | Outer flat does not close — 25.5 mm of connectors on a 25.4 mm flat | **High** | Placement study is the first task in Phase 1. Fallbacks in order: drop microSD and move USB-C to a side flat; then the radial wedge outline (§4.4). |
 | 3 | SPI link slower than 40 MHz in practice | Medium | Display-list architecture already assumes 2.5 MB/s. Degrades to fewer draw calls, not to a broken product. |
 | 4 | 600 mA budget or inrush trips the port switch | Medium | Modest bulk capacitance, staged boost enable, measured in Phase 0. Qwiic devices documented as sharing ~100 mA of headroom. |
 | 5 | Mini-HDMI wired as if it were Type A | Medium | Different pin assignment; net list from the connector datasheet, and check it at review. |
 | 6 | Badge battery life halves when the card is running | Medium | USB-C power input with supply OR-ing. |
-| 7 | Cable strain on the edge connector | Medium | Both M2 mounting holes populated; strain-relief loop documented for users. Mini-HDMI reduces leverage but has lower retention force than Type A. |
+| 7a | Neighbouring hexpansion sits 4.1 mm away, blocking side-flat cables | Medium | Fat-cable connectors are all on the outer flat by design; Qwiic and SD are documented as needing the adjacent bay free. |
+| 7 | Cable strain on the edge connector — worse on a 89% larger board | Medium | Both M2 mounting holes populated; strain-relief loop documented for users. Mini-HDMI reduces leverage but has lower retention force than Type A. |
 | 8 | TMDS signal integrity on a 1.0 mm 4-layer board | Low | Short runs, controlled impedance, proven direct-drive topology. |
 | 9 | VID/PID not assigned in time | Low | Ask in week 1; costs nothing. |
 | 10 | RP2350-E9 pull-down erratum bites on LS/CS/I2C lines | Low | External pull resistors everywhere it matters. |
@@ -538,15 +616,17 @@ yet.
 
 | Decision | Outcome |
 |----------|---------|
-| Video connector | **Mini-HDMI Type C.** Cables are common (Pi Zero, most cameras) and it frees 5 mm of outer edge versus Type A. |
+| Video connector | **Mini-HDMI Type C.** Cables are common (Pi Zero, most cameras), and on an 18.5–25.4 mm flat the 5 mm it saves over Type A is decisive. |
 | USB-C | **In** — power, UF2, and a CDC console. |
 | Debug | **3-pin JST-SH SWD** to the Raspberry Pi debug connector standard, so a Debug Probe plugs straight in. |
 | Buttons | **BOOT and RESET**, both on the top face. |
 | LEDs | **Power (always on) + status on GPIO1**, plus an optional SK6805 RGB. |
-| Qwiic | **Two JST-SH 4-pin sockets in parallel** on hardware I2C1, with jumper-removable 4k7 pull-ups. J4 edge-mounted, J5 top-mounted. |
-| microSD | **Dropped.** Three spare GPIOs where SPI SD needs four, and no space left. |
+| Qwiic | **Two JST-SH 4-pin sockets in parallel** on hardware I2C1 (GPIO6/7), with jumper-removable 4k7 pull-ups. Both on side flat A. |
+| Board size | **44 mm across flats** (was the 32 mm template). Smallest size where mini-HDMI and USB-C fit on the outer flat. Costs ~$2/board. |
+| microSD | **Back in**, on SPI1 GPIO8–11, on the second side flat. First thing to cut if the placement study fails. |
 
 ### Still open
 
 * **Run size.** The fixed-cost curve in §7 says 50 if there is any chance of 50.
-* **Whether J5 survives Phase 1 layout.** Decided by the placement study, not now.
+* **Whether the outer flat closes at 44 mm**, or the board wants the wedge outline. Decided by the placement study, not now.
+* **Whether microSD earns its place.** 16 MB of flash plus USB-C asset loading may make it redundant.
