@@ -692,22 +692,6 @@ yet.
 | 13 | VID/PID not assigned in time | Low | Ask in week 1; costs nothing. |
 | 14 | RP2350-E9 pull-down erratum bites on LS/CS/I2C lines | Low | External pull resistors everywhere it matters. |
 
-------|----------|------------|
-| 1 | EEPROM emulation loses the enumeration race at power-on | **High** | Fast-boot I2C target; clock stretching; DNP 24C64 fallback footprint. Proven or disproven in Phase 0. |
-| 2 | Outer flat does not close — 25.5 mm of connectors on a 25.4 mm flat | **High** | Placement study is the first task in Phase 1. Fallbacks in order: drop microSD and move USB-C to a side flat; then the radial wedge outline (§4.4). |
-| 3 | USB backfeed reaches the badge's 3V3 rail | **High** | TPS2116 priority mux with reverse blocking on both inputs; VBUS confined to the USB domain; HDMI 5 V never muxed with VBUS. Bench-proven in Phase 0. |
-| 4 | Phantom-powering the badge through signal pins | Medium | Only MISO and LS_B can source; both firmware tri-stated until badge-presence sense reads live; 33 Ω series on HS lines. |
-| 5 | Buck fails short, putting 5 V on `3V3_LOCAL` | Medium | The mux's reverse blocking keeps it off the badge. On-board damage is accepted; consider a 3.6 V clamp on `3V3_LOCAL` if the placement study leaves room. |
-| 6 | SPI link slower than 40 MHz in practice | Medium | Display-list architecture already assumes 2.5 MB/s. Degrades to fewer draw calls, not to a broken product. |
-| 4 | 600 mA budget or inrush trips the port switch | Medium | Modest bulk capacitance, staged boost enable, measured in Phase 0. Qwiic devices documented as sharing ~100 mA of headroom. |
-| 5 | Mini-HDMI wired as if it were Type A | Medium | Different pin assignment; net list from the connector datasheet, and check it at review. |
-| 6 | Badge battery life halves when the card is running | Medium | USB-C power input with supply OR-ing. |
-| 7a | Neighbouring hexpansion sits 4.1 mm away, blocking side-flat cables | Medium | Fat-cable connectors are all on the outer flat by design; Qwiic and SD are documented as needing the adjacent bay free. |
-| 7 | Cable strain on the edge connector — worse on a 89% larger board | Medium | Both M2 mounting holes populated; strain-relief loop documented for users. Mini-HDMI reduces leverage but has lower retention force than Type A. |
-| 8 | TMDS signal integrity on a 1.0 mm 4-layer board | Low | Short runs, controlled impedance, proven direct-drive topology. |
-| 9 | VID/PID not assigned in time | Low | Ask in week 1; costs nothing. |
-| 10 | RP2350-E9 pull-down erratum bites on LS/CS/I2C lines | Low | External pull resistors everywhere it matters. |
-
 ---
 
 ## 10. Decisions taken
