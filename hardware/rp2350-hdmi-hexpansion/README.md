@@ -139,68 +139,144 @@ the one item with an external dependency and zero cost.
 
 ## 2. Product definition
 
-A hexpansion that:
+**Primary mode: the badge's own screen, on a monitor.** The hexpansion mirrors the
+240×240 round display, pixel-doubled to 480×480 and circular-masked to match what people
+actually see on the badge. **Every existing Tildagon app gets HDMI output with no code
+changes** — no API to learn, no per-app work. That property is the product.
 
-1. Outputs **DVI/HDMI** from the RP2350's HSTX peripheral, on a **mini-HDMI (Type C)**
-   receptacle.
-2. Carries **16 MB QSPI flash** (boot + sprite/font/asset storage), **8 MB QSPI PSRAM**
-   (framebuffers, off-screen surfaces) and a **microSD socket** for bulk assets.
-3. **Emulates the identification EEPROM** at `0x50` in RP2350 firmware, serving a 64 KiB
+Everything else supports it:
+
+1. **DVI/HDMI** from the RP2350's HSTX peripheral, on a **mini-HDMI (Type C)** receptacle.
+2. **Emulates the identification EEPROM** at `0x50` in RP2350 firmware, serving a 64 KiB
    LittleFS image that contains the badge-side MicroPython driver app. The RP2350 owns
    that image, so the driver updates itself with the hexpansion firmware — no separate
    EEPROM flashing step, ever.
-4. Accepts drawing commands from the badge over a **SPI link on the four HS pins**.
-5. Takes **USB-C power** so it does not flatten the badge battery — powering this board
-   only, never the badge, under any condition (§4.5) — and offers the full debug surface:
-   UF2 and a USB CDC console over the same connector, plus a **3-pin SWD connector** for a
-   Raspberry Pi Debug Probe.
-6. Exposes **two Qwiic / STEMMA QT sockets** on their own I2C bus, which the badge can
-   also reach through the GFX card as an I2C bridge.
-7. Is built on a **44 mm across-flats hexagon** rather than the 32 mm template — the
-   smallest size at which the connectors actually fit (§4.4).
+3. A **SPI link on the four HS pins** carrying framebuffer updates, or drawing commands.
+4. **16 MB QSPI flash**, **8 MB QSPI PSRAM** and a **microSD socket** for the advanced
+   mode's assets. The mirroring path needs none of it (§3.1).
+5. **Display-list mode** for apps that want more than 240×240 — the RP2350 holds the
+   assets and renders (§3.2).
+6. **USB-C power** so it does not flatten the badge battery — powering this board only,
+   never the badge, under any condition (§4.5) — plus UF2, a USB CDC console, and a
+   **3-pin SWD connector** for a Raspberry Pi Debug Probe.
+7. **Two Qwiic / STEMMA QT sockets**, which the badge can reach through the card as an
+   I2C bridge.
+8. A **44 mm across-flats hexagon** rather than the 32 mm template — the smallest size at
+   which the connectors fit (§4.4).
 
-The badge stays the computer. This is a graphics *card*, not a co-processor that does
-the badge's job for it.
+The badge stays the computer. This is a display, and secondarily a graphics card.
 
----
+## 3. Two modes, and the bandwidth that shapes them
 
-## 3. The bandwidth reality, and what it forces
+### 3.1 Primary — mirroring the badge screen
 
-40 MHz SPI is ~5 MB/s at absolute best. A 640×480 16 bpp frame is 614 KB. Pushing whole
-frames from the badge would give **8 fps**, and that is before MicroPython overhead.
+The data path already exists in the badge firmware. From
+`badge-2024-software/drivers/gc9a01/display.c`:
 
-So the architecture is settled by arithmetic: **the badge sends a display list, not
-pixels.** The RP2350 holds the assets and does the rendering.
+```c
+EXT_RAM_BSS_ATTR
+static uint8_t tildagon_fb[240 * 240 * 2];          // :34
+...
+tildagon_ctx = ctx_new_for_framebuffer(tildagon_fb, 240, 240, 480,
+                                       CTX_FORMAT_RGB565_BYTESWAPPED);   // :41
+...
+void tildagon_blit_fb(void) { flow3r_bsp_display_send_fb(tildagon_fb, 16); }  // :64
+```
 
-Protocol sketch (4-byte header + payload, full duplex so the RP2350 can return status
-on MISO in the same transaction):
+One static **115,200-byte framebuffer**, RGB565 **byteswapped**, living in the ESP32's
+PSRAM. ctx renders into it; `tildagon_end_frame()` blits it to the panel. **Every app
+funnels through `display.end_frame(ctx)`** — a single choke point, always populated, in a
+fixed format. Nothing better could be asked for.
+
+The byteswap costs us nothing: the RP2350 can swap during DMA or in the HSTX command
+stream.
+
+#### The one blocker
+
+**The framebuffer is not exposed to MicroPython.** The `display` module publishes
+`gfx_init`, `bsp_init`, `splash`, `get_fps`, `get_ctx`, `end_frame` and `hexagon` — and no
+framebuffer accessor. A hexpansion app cannot read those bytes today.
+
+This needs a small upstream change to `badge-2024-software`: a `display.get_fb()` returning
+a `memoryview` of `tildagon_fb`, which is on the order of ten lines of C. **Raise it in
+week 1 alongside the VID/PID request** — it is short work, but it is on someone else's
+schedule, and mirroring does not exist without it. See risk 4.
+
+#### Link arithmetic
+
+| | Bytes/frame | @5 MB/s | @2.5 MB/s |
+|---|---:|---:|---:|
+| Full 240×240 frame, RGB565 | 115,200 | **43 fps** | **22 fps** |
+| Half the screen changed | 57,600 | 87 fps | 43 fps |
+| Typical static UI, ~10% dirty | 11,520 | 434 fps | 217 fps |
+
+**But the link is almost certainly not the ceiling.** Mirroring cannot show more frames
+than the badge draws, and a ctx-rendered MicroPython app on an ESP32-S3 is unlikely to be
+doing forty. The firmware already tracks this — `st3m_gfx_fps()`, exposed as
+`display.get_fps()` — so Phase 0 measures it across real apps rather than guessing. Expect
+**the badge's own render rate to be what you see**, and design the link to stay out of
+the way rather than to chase a number.
+
+Dirty-rectangle updates still help, but note the badge does not track dirty regions — ctx
+redraws the whole frame. Finding them means a block-`memcmp` against a second copy of the
+buffer, which is cheap in MicroPython (comparing `memoryview` slices drops into C) but
+needs another 115 KB on the badge. Worth having; not worth having in v1.
+
+#### Scaling
+
+| Scale | Output | Status |
+|-------|--------|--------|
+| **2×** | 480×480 pillarboxed in 640×480 @60 | **v1 mode.** Standard timings, integer nearest-neighbour, sharp and near-free |
+| 3× | 720×720 pillarboxed in 1280×720 | Exact integer fit for 720p height — elegant, but needs the overclocked 74.25 MHz pixel clock |
+
+#### Two consequences that de-risk the design
+
+* **Memory leaves the critical path.** Source 115 KB, double-buffered 230 KB — comfortably
+  inside the RP2350's 520 KB of SRAM. **The mirroring mode never touches PSRAM**, so the
+  one video mode rated "needs measurement" (§3.3) no longer gates the primary product.
+* **The badge-side driver becomes trivial** — read the buffer, push it, repeat. The
+  display-list API becomes an opt-in extra rather than something every app author must
+  learn.
+
+#### The round display
+
+The panel is circular, so the corners of that square buffer hold whatever ctx drew but are
+never visible on the badge. On HDMI they would be. **The circular mask is on by default**,
+so the monitor shows what the wearer sees; a runtime toggle reveals the full square for
+debugging.
+
+### 3.2 Advanced — the display list
+
+For apps that want more than 240×240, the arithmetic is unforgiving. 40 MHz SPI is ~5 MB/s
+at best; a 640×480 16 bpp frame is 614 KB, so pushing full frames gives **8 fps** before
+any MicroPython overhead. So at full resolution **the badge sends a display list, not
+pixels** — the RP2350 holds the assets and renders. Asset upload is the only bulk
+transfer and happens once; a full-screen 60 fps scene then costs a few hundred bytes per
+frame.
 
 | Class | Commands |
 |-------|----------|
+| **Mirror** | `mirror_config` (scale, mask, background) · `mirror_frame` · `mirror_rect` · `resync` |
 | Mode | `set_mode`, `get_edid`, `blank`, `set_palette` |
 | Assets | `upload_asset` (to flash or PSRAM), `free_asset`, `list_assets` |
-| Draw | `clear`, `rect`, `line`, `blit`, `blit_scaled`, `text`, `tilemap`, `sprite_batch` |
+| Draw | `clear`, `rect`, `line`, `blit`, `blit_rect`, `blit_scaled`, `text`, `tilemap`, `sprite_batch` |
 | Frame | `present` (flip), `vsync_wait`, `set_layer` |
 | Audio | `queue_pcm` (HDMI audio data islands — no extra pins needed) |
 | Bridge | `i2c_scan`, `i2c_txn` — badge reaches the Qwiic bus through the card |
 | System | `ping`, `status`, `reset`, `enter_bootloader`, `fw_update` |
 
-Asset upload is the only bulk transfer and it happens once, not per frame. After that a
-full-screen 60 fps scene costs the badge a few hundred bytes per frame. That is the
-design working *with* the 5 MB/s ceiling instead of against it.
+`resync` is a full-frame refresh on demand, kept for robustness rather than bandwidth: a
+dropped or corrupted update must not be able to leave a permanent artifact on screen.
 
-### Achievable video modes
+### 3.3 Achievable video modes
 
-| Mode | Colour | Buffering | Confidence |
-|------|--------|-----------|-----------|
-| 320×240 pixel-doubled to 640×480 @60 | 16 bpp | double-buffered in SRAM (2×150 KB) | **High — this is the target for v1** |
-| 640×480 @60 | 8 bpp palettised | single buffer in SRAM (307 KB) + PSRAM back buffer | High |
-| 640×480 @60 | 16 bpp | PSRAM-backed, line-buffer DMA (~37 MB/s sustained) | Medium — needs measurement |
-| 800×600 / 720p30 | reduced depth | PSRAM-backed, system clock overclocked | Low — stretch goal |
-
-Ship v1 on the first row. Everything else is a firmware update.
-
----
+| Mode | Source | Colour | Buffering | Confidence |
+|------|--------|--------|-----------|-----------|
+| 240×240 ×2 → 480×480 in 640×480 @60 | mirror | 16 bpp | 2×115 KB in SRAM | **High — v1 primary** |
+| 320×240 doubled to 640×480 @60 | display list | 16 bpp | 2×150 KB in SRAM | High |
+| 640×480 @60 | display list | 8 bpp palette | 307 KB SRAM + PSRAM back buffer | High |
+| 640×480 @60 | display list | 16 bpp | PSRAM-backed, line-buffer DMA ~37 MB/s | Medium — needs measurement, but no longer gates v1 |
+| 240×240 ×3 → 720×720 in 1280×720 | mirror | 16 bpp | 2×115 KB in SRAM | Low — needs overclocked 720p timings |
 
 ## 4. Hardware architecture
 
@@ -622,8 +698,8 @@ lead time when you kill a board on the bench.
 ### Phase 0 — De-risk on hardware you already have (2–3 weekends, ~$40)
 
 Before drawing a single schematic symbol. Wire a Pico 2 + DVI Sock to a badge port using
-a protoboard hexpansion (`codemyriad/protogon` or DanNixon's devkit) and prove the three
-things that could kill the design:
+a protoboard hexpansion (`codemyriad/protogon` or DanNixon's devkit) and settle everything
+that could kill the design:
 
 1. **EEPROM emulation enumerates reliably.** Cold-plug the hexpansion 50 times. Measure
    the worst-case time from port power-on to the badge's first I2C read, and the RP2350's
@@ -631,9 +707,16 @@ things that could kill the design:
    becomes the primary plan and the schematic changes.
 2. **SPI link speed.** Sweep 10→40 MHz over the HS pins with the real edge connector in
    circuit. Record the highest reliable rate and the MicroPython-side throughput.
-3. **HSTX DVI at 320×240 doubled**, running from the badge's 3V3 with a current meter
-   inline, to validate §4.7.
-4. **Backfeed check.** With the badge powered off and USB-C live, measure the current into
+   Then push a real 115,200-byte frame and time it end to end.
+3. **What the badge actually renders.** Log `display.get_fps()` across a handful of real
+   apps. If it comes in around 15 fps, the link has enormous headroom and the mirror
+   design gets simpler; if it is near 40, dirty-rect support moves into v1. This is the
+   measurement that decides how much work §3.1 needs.
+4. **Prototype `display.get_fb()`** against a local firmware build, so the upstream ask is
+   a tested patch rather than a feature request.
+5. **HSTX DVI at 240×240 pixel-doubled**, running from the badge's 3V3 with a current
+   meter inline, to validate §4.7.
+6. **Backfeed check.** With the badge powered off and USB-C live, measure the current into
    pads 15/16 and the voltage on the badge's `3V3_SYS`. Both must read zero. Repeat with
    the badge on and the port disabled in software. This is the test that proves §4.5, and
    it is worth building a jig for.
@@ -651,7 +734,8 @@ keep the runs under ~30 mm (which the board size makes easy).
 **Do the flat-allocation placement study first** (§4.4) — the outer flat carries
 mini-HDMI plus USB-C at 25.5 mm on a 25.4 mm flat, so connector placement, not routing,
 is what decides whether this board closes. If it does not, either drop microSD and move
-USB-C to a side flat, or switch to the radial wedge outline. Request VID/PID in week 1.
+USB-C to a side flat, or switch to the radial wedge outline. Request VID/PID **and open the `display.get_fb()` conversation upstream** in week 1 —
+both are short work on someone else's schedule.
 
 ### Phase 2 — Prototype run (5 boards, ~2 weeks lead time)
 
@@ -660,14 +744,20 @@ USB-C to a side flat, or switch to the radial wedge outline. Request VID/PID in 
 Pico SDK in C. Order of work: badge-presence sense and tri-state-by-default on MISO/LS_B
 (this comes first — it is a safety interlock, not a feature) → boot + flash/PSRAM bring-up → I2C target and EEPROM
 emulation → HSTX DVI output → SPI slave with DMA (PIO-based, so clock-stretch and
-back-pressure are under our control) → the drawing engine → PIO-I2C DDC/EDID and mode
-negotiation → Qwiic bus and the I2C bridge commands → microSD → HDMI audio if time allows.
+back-pressure are under our control) → the mirror path (receive frame, pixel-double,
+mask, present) → the drawing engine → PIO-I2C DDC/EDID and mode negotiation → Qwiic bus and the I2C bridge commands → microSD → HDMI audio if time allows.
 
-### Phase 4 — Badge-side driver (1–2 weeks)
+### Phase 4 — Badge-side driver and the upstream patch (1–2 weeks)
 
-MicroPython app baked into the LittleFS image the fake EEPROM serves, plus a companion
-app published to this repo's index so people can install it without owning the hardware
-yet.
+Two deliverables. **A PR to `badge-2024-software`** exposing `tildagon_fb` as
+`display.get_fb()` — prototyped back in Phase 0, so this is submitting tested work rather
+than asking for a feature. And the **mirror app**: read the buffer after each
+`end_frame`, push it over SPI, done. Baked into the LittleFS image the fake EEPROM serves,
+plus a companion app in this repo's index so people can install it without owning the
+hardware yet.
+
+The display-list driver is a later, separate piece of work — nothing depends on it for the
+primary mode.
 
 ### Phase 5 — Production run (10/20/50 per §7)
 
@@ -680,17 +770,19 @@ yet.
 | 1 | EEPROM emulation loses the enumeration race at power-on | **High** | Fast-boot I2C target; clock stretching; DNP 24C64 fallback footprint. Proven or disproven in Phase 0. |
 | 2 | Outer flat does not close — 25.5 mm of connectors on a 25.4 mm flat | **High** | Placement study is the first task in Phase 1. Fallbacks in order: drop microSD and move USB-C to a side flat; then the radial wedge outline (§4.4). |
 | 3 | USB backfeed reaches the badge's 3V3 rail | **High** | TPS2116 priority mux with reverse blocking on both inputs; `VBUS` confined to the USB domain; HDMI 5 V never muxed with `VBUS`. Bench-proven in Phase 0. |
-| 4 | Phantom-powering the badge through signal pins | Medium | Only MISO and LS_B can source; both firmware tri-stated until the badge-presence sense reads live; 33 Ω series on the HS lines. |
-| 5 | Buck fails short, putting 5 V on `3V3_LOCAL` | Medium | The mux's reverse blocking keeps it off the badge. On-board damage is accepted; add a 3.6 V clamp on `3V3_LOCAL` if the layout leaves room. |
-| 6 | SPI link slower than 40 MHz in practice | Medium | Display-list architecture already assumes 2.5 MB/s. Degrades to fewer draw calls, not to a broken product. |
+| 4 | **`display.get_fb()` never lands upstream**, so nothing can read the badge framebuffer | **High** | Ask in week 1 with a tested patch from Phase 0; it is ~10 lines of C at a single choke point. If it is refused, the product falls back to display-list mode only — still a working graphics card, but it loses the "every app for free" property that makes mirroring the headline. Do not discover this late. |
+| 5 | Phantom-powering the badge through signal pins | Medium | Only MISO and LS_B can source; both firmware tri-stated until the badge-presence sense reads live; 33 Ω series on the HS lines. |
+| 6 | Buck fails short, putting 5 V on `3V3_LOCAL` | Medium | The mux's reverse blocking keeps it off the badge. On-board damage is accepted; add a 3.6 V clamp on `3V3_LOCAL` if the layout leaves room. |
 | 7 | 600 mA budget or inrush trips the port switch | Medium | Modest bulk capacitance, staged boost enable, measured in Phase 0. Qwiic devices documented as sharing ~100 mA of headroom. |
 | 8 | Mini-HDMI wired as if it were Type A | Medium | Different pin assignment; netlist from the connector datasheet, and check it at review. |
 | 9 | Neighbouring hexpansion sits 4.1 mm away, blocking side-flat cables | Medium | Fat-cable connectors are all on the outer flat by design; Qwiic and SD documented as needing the adjacent bay free. |
 | 10 | Cable strain on the edge connector — worse on an 89% larger board | Medium | Both M2 mounting holes populated; strain-relief loop documented for users. Mini-HDMI reduces leverage but has lower retention force than Type A. |
 | 11 | Badge battery life halves when the card runs on badge power | Medium | USB-C input with the TPS2116 mux — on USB the badge supplies nothing at all. |
-| 12 | TMDS signal integrity on a 1.0 mm 4-layer board | Low | Short runs, controlled impedance, proven direct-drive topology. |
-| 13 | VID/PID not assigned in time | Low | Ask in week 1; costs nothing. |
-| 14 | RP2350-E9 pull-down erratum bites on LS/CS/I2C lines | Low | External pull resistors everywhere it matters. |
+| 12 | Badge renders too slowly for mirroring to look good | Low | Inherent: you see what the badge draws, and no link speed changes that. Measured in Phase 0; document the expectation rather than engineering against it. |
+| 13 | SPI link slower than 40 MHz in practice | Low | Mirroring needs 115 KB/frame and is bounded by the badge anyway; the display-list path already assumes 2.5 MB/s. |
+| 14 | TMDS signal integrity on a 1.0 mm 4-layer board | Low | Short runs, controlled impedance, proven direct-drive topology. |
+| 15 | VID/PID not assigned in time | Low | Ask in week 1; costs nothing. |
+| 16 | RP2350-E9 pull-down erratum bites on LS/CS/I2C lines | Low | External pull resistors everywhere it matters. |
 
 ---
 
@@ -698,6 +790,8 @@ yet.
 
 | Decision | Outcome |
 |----------|---------|
+| **Primary mode** | **Mirroring the badge's 240×240 screen**, pixel-doubled to 480×480 in 640×480. Display-list rendering becomes the advanced, opt-in path. |
+| **Circular mask** | **On by default** — the monitor shows what the wearer sees. Runtime toggle reveals the full square for debugging. |
 | Video connector | **Mini-HDMI Type C.** Cables are common (Pi Zero, most cameras), and on an 18.5–25.4 mm flat the 5 mm it saves over Type A is decisive. |
 | USB-C | **In** — power, UF2, and a CDC console. |
 | Debug | **3-pin JST-SH SWD** to the Raspberry Pi debug connector standard, so a Debug Probe plugs straight in. |
