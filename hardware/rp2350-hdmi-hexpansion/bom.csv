@@ -2,25 +2,27 @@ Item,Designator,Description,MPN,LCSC,Package,Qty,UnitUSD_qty10,UnitUSD_qty50,Ext
 1,U1,Dual Cortex-M33 MCU with HSTX,RP2350A,C42411118,QFN-60 7x7,1,1.45,1.20,1.45,1.20,Price has ranged 1.03-1.71; verify at order
 2,U2,16 MB QSPI NOR flash,W25Q128JVSIQ,C97521,SOIC-8,1,1.10,0.90,1.10,0.90,GD25Q128ESIG ~0.85 as alternate
 3,U3,8 MB QSPI PSRAM,APS6404L-3SQR-ZR,C3040877,SOP-8,1,1.15,1.00,1.15,1.00,Do not buy the -SN variant; 2.5x price
-4,U4,Boost converter 3V3 to 5V 0.5 A,TPS61023DRLR,,SOT-563,1,0.55,0.45,0.55,0.45,Supplies HDMI pin 18; EN gated from GPIO
-5,U5,Dual bidirectional level translator,PCA9306DCUR,,VSSOP-8,1,0.32,0.26,0.32,0.26,HDMI DDC/EDID level shift
+4,U4,Boost converter 3V3 to 5V 0.5 A,TPS61023DRLR,,SOT-563,1,0.55,0.45,0.55,0.45,Supplies HDMI +5V; EN gated from GPIO
+5,U5,Dual bidirectional level translator,PCA9306DCUR,,VSSOP-8,1,0.32,0.26,0.32,0.26,HDMI DDC/EDID level shift on PIO I2C
 6,"U6,U7",4-channel ESD array 0.4 pF,TPD4E05U06DQAR,,USON-10,2,0.38,0.30,0.76,0.60,Low-cap required for TMDS
 7,U8,64 kbit I2C EEPROM (fallback),ZD24C64A-XGMT,C2875852,SOP-8,1,0.11,0.09,0.11,0.09,DNP - populate only if EEPROM emulation fails
-8,J1,HDMI Type A receptacle SMD right-angle,,,,1,0.60,0.48,0.60,0.48,Micro-HDMI Type D is the space-saving alternate
-9,J2,USB-C 16P receptacle,,,,1,0.30,0.24,0.30,0.24,Self-power + UF2 firmware update
-10,D1,USB ESD protection,USBLC6-2SC6,,SOT-23-6,1,0.10,0.08,0.10,0.08,
-11,"Q1,Q2",P-channel MOSFET supply OR-ing,AO3401,,SOT-23,2,0.06,0.05,0.12,0.10,Prevents backfeeding the badge from USB
-12,Y1,12 MHz crystal +/-30 ppm,,,3225,1,0.16,0.13,0.16,0.13,RP2350 reference clock
-13,L1,3.3 uH shielded inductor,,,0805,1,0.10,0.08,0.10,0.08,RP2350 VREG_LX core buck
-14,L2,2.2 uH shielded inductor,,,0805,1,0.09,0.07,0.09,0.07,Boost converter
-15,"FB1,FB2",Ferrite bead 600R @100 MHz,,,0402,2,0.02,0.015,0.04,0.03,
-16,C1-C2,22 uF 6.3 V X5R,,,0805,2,0.05,0.04,0.10,0.08,Keep total bulk near 40 uF for inrush
-17,C3-C6,10 uF 6.3 V X5R,,,0603,4,0.02,0.015,0.08,0.06,
-18,C7-C10,1 uF 16 V X7R,,,0402,4,0.01,0.008,0.04,0.03,
-19,C11-C28,100 nF 16 V X7R,,,0402,18,0.004,0.003,0.07,0.05,Decoupling
-20,"C29,C30",15 pF C0G,,,0402,2,0.004,0.003,0.01,0.01,Crystal load
-21,R1-R16,Assorted pulls / dividers / LED,,,0402,16,0.003,0.002,0.05,0.03,External pulls required - RP2350-E9 erratum
-22,SW1,Tactile switch BOOTSEL,,,3x2 mm,1,0.06,0.05,0.06,0.05,
-23,LED1,Green indicator LED,,,0603,1,0.02,0.015,0.02,0.02,
-24,LED2,SK6805 RGB status LED,,,2427,1,0.08,0.06,0.08,0.06,Optional
-,,,,,,66 placements,,,7.45,6.20,Totals per board
+8,J1,Mini-HDMI Type C receptacle right-angle,,,SMD,1,0.65,0.52,0.65,0.52,Pin assignment differs from Type A - wire from datasheet
+9,J2,USB-C 16P receptacle,,,SMD,1,0.30,0.24,0.30,0.24,Power in + UF2 + USB CDC console
+10,J3,JST-SH 3-pin SWD debug,SM03B-SRSS-TB,,SMD,1,0.12,0.10,0.12,0.10,Raspberry Pi debug connector standard - SWCLK/GND/SWDIO
+11,"J4,J5",JST-SH 4-pin Qwiic / STEMMA QT,SM04B-SRSS-TB,,SMD,2,0.13,0.11,0.26,0.22,Parallel on hardware I2C1; J4 edge-mounted J5 top-mounted
+12,D1,USB ESD protection,USBLC6-2SC6,,SOT-23-6,1,0.10,0.08,0.10,0.08,
+13,"Q1,Q2",P-channel MOSFET supply OR-ing,AO3401,,SOT-23,2,0.06,0.05,0.12,0.10,Prevents backfeeding the badge from USB
+14,Y1,12 MHz crystal +/-30 ppm,,,3225,1,0.16,0.13,0.16,0.13,RP2350 reference clock
+15,L1,3.3 uH shielded inductor,,,0805,1,0.10,0.08,0.10,0.08,RP2350 VREG_LX core buck
+16,L2,2.2 uH shielded inductor,,,0805,1,0.09,0.07,0.09,0.07,Boost converter
+17,"FB1,FB2",Ferrite bead 600R @100 MHz,,,0402,2,0.02,0.015,0.04,0.03,
+18,C1-C2,22 uF 6.3 V X5R,,,0805,2,0.05,0.04,0.10,0.08,Keep total bulk near 40 uF for inrush
+19,C3-C6,10 uF 6.3 V X5R,,,0603,4,0.02,0.015,0.08,0.06,
+20,C7-C10,1 uF 16 V X7R,,,0402,4,0.01,0.008,0.04,0.03,
+21,C11-C28,100 nF 16 V X7R,,,0402,18,0.004,0.003,0.07,0.05,Decoupling
+22,"C29,C30",15 pF C0G,,,0402,2,0.004,0.003,0.01,0.01,Crystal load
+23,R1-R22,Pulls / dividers / Qwiic 4k7 / LED resistors,,,0402,22,0.003,0.002,0.07,0.04,External pulls required - RP2350-E9 erratum; Qwiic pull-ups on solder jumper
+24,"SW1,SW2",Tactile switch - BOOT and RESET,,,3x2 mm,2,0.06,0.05,0.12,0.10,RESET pulls RUN low; shares pin with badge LS_A
+25,"LED1,LED2",Power LED (always on) + status LED,,,0603,2,0.02,0.02,0.04,0.04,LED1 on 4k7 for ~0.4 mA; LED2 on GPIO1
+26,LED3,SK6805 RGB status LED,,,2427,1,0.08,0.06,0.08,0.06,Optional
+,,,,,,77 placements,,,7.98,6.64,Totals per board
