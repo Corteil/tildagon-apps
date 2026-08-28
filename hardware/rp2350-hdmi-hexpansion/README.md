@@ -224,10 +224,20 @@ needs another 115 KB on the badge. Worth having; not worth having in v1.
 
 #### Scaling
 
-| Scale | Output | Status |
-|-------|--------|--------|
-| **2×** | 480×480 pillarboxed in 640×480 @60 | **v1 mode.** Standard timings, integer nearest-neighbour, sharp and near-free |
-| 3× | 720×720 pillarboxed in 1280×720 | Exact integer fit for 720p height — elegant, but needs the overclocked 74.25 MHz pixel clock |
+**The output is always a standard 640×480 @60 Hz signal** — CEA-861 VIC 1, 25.2 MHz pixel
+clock, 800×525 total, which every HDMI sink is required to accept. The doubling happens in
+how the framebuffer is filled, not in the signal:
+
+| | |
+|---|---|
+| Source | 240×240 RGB565 |
+| Scale | ×2 nearest-neighbour → **480×480** |
+| Vertical | 480 into 480 — **exact fit**, no letterbox |
+| Horizontal | 640 − 480 = 160 → **80 px pillarbox bars** either side |
+| Mask | circular, applied inside the 480×480 square |
+
+**2× is the only integer scale available, and that is a hard limit** — see §3.3. No in-spec
+HSTX mode is 720 pixels tall, so there is no 3× option to reach for.
 
 #### Two consequences that de-risk the design
 
@@ -268,15 +278,36 @@ frame.
 `resync` is a full-frame refresh on demand, kept for robustness rather than bandwidth: a
 dropped or corrupted update must not be able to leave a permanent artifact on screen.
 
-### 3.3 Achievable video modes
+### 3.3 Achievable video modes — and the HSTX ceiling
+
+**HSTX is specified at 300 Mbps per pin.** Each of the four pairs on GPIO12–19 carries one
+TMDS lane, and a DVI lane runs at ten bits per pixel clock, so the ceiling is a **30 MHz
+pixel clock**. That single number decides the whole mode list:
+
+| Mode | Pixel clock | Per lane | vs 300 Mbps |
+|------|------------:|---------:|-------------|
+| **640×480 @60** | 25.2 MHz | 252 Mbps | **84% — in spec** |
+| 720×400 @70 | 28.3 MHz | 283 Mbps | 94% — in spec |
+| 800×600 @60 | 40 MHz | 400 Mbps | 133% — ~33% overclock |
+| 1280×720 @30 or @60 | 74.25 MHz | 742.5 Mbps | 248% — **not achievable** |
+
+720p is not a stretch goal, it is out of reach: standard CEA timing needs two and a half
+times what the peripheral is rated for, which is not a margin you tune into. Anything
+above 640×480 means running out of spec.
+
+So the practical mode list is short:
 
 | Mode | Source | Colour | Buffering | Confidence |
 |------|--------|--------|-----------|-----------|
-| 240×240 ×2 → 480×480 in 640×480 @60 | mirror | 16 bpp | 2×115 KB in SRAM | **High — v1 primary** |
+| 240×240 ×2 → 480×480 pillarboxed in 640×480 @60 | mirror | 16 bpp | 2×115 KB in SRAM | **High — v1 primary** |
 | 320×240 doubled to 640×480 @60 | display list | 16 bpp | 2×150 KB in SRAM | High |
 | 640×480 @60 | display list | 8 bpp palette | 307 KB SRAM + PSRAM back buffer | High |
 | 640×480 @60 | display list | 16 bpp | PSRAM-backed, line-buffer DMA ~37 MB/s | Medium — needs measurement, but no longer gates v1 |
-| 240×240 ×3 → 720×720 in 1280×720 | mirror | 16 bpp | 2×115 KB in SRAM | Low — needs overclocked 720p timings |
+| 800×600 @60 | display list | 8 bpp palette | PSRAM-backed | Low — 33% HSTX overclock, out of spec |
+
+640×480 is not merely the safe choice; it is very nearly the only standard mode the
+peripheral can reach. That is fine for the primary product — 480×480 fits its vertical
+resolution exactly.
 
 ## 4. Hardware architecture
 
