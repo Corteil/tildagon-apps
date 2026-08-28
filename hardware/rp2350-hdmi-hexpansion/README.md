@@ -309,6 +309,71 @@ So the practical mode list is short:
 peripheral can reach. That is fine for the primary product — 480×480 fits its vertical
 resolution exactly.
 
+### 3.4 What is left over
+
+**Almost everything.** Mirroring is close to a pure DMA workload on the RP2350 — the CPU
+barely participates — and that is what makes the display-list path an addition rather than
+an alternative.
+
+The reason is that nothing is materialised. There is no 640×480 framebuffer; there is a
+240×240 source scaled **during scanout**. HSTX's shift register emits each 16-bit pixel
+twice for horizontal doubling, and the DMA chain re-reads each source line for vertical.
+Same mechanism the pico HSTX examples use for 320×240 → 640×480: no extra memory, no
+cycles.
+
+| Task | Mechanism | CPU |
+|------|-----------|-----|
+| TMDS encoding | HSTX hardware encoder | none |
+| Scanout, 31,500 lines/s | chained DMA, per-line descriptors | ~2–5% of one core |
+| RGB565 byteswap | DMA `BSWAP` bit | none |
+| Horizontal ×2 | HSTX shift register | none |
+| Vertical ×2 | DMA re-reads each source line | none |
+| Circular mask + pillarbox | precomputed per-line descriptor table, built once at mode-set | none per frame |
+| SPI frame receive | DMA, one interrupt per frame | <1% |
+| Buffer swap | pointer flip on vsync | negligible |
+
+The 2–5% is the only real number, and it depends on whether scanout is fully DMA-chained
+or takes a per-line IRQ. Treat it as single-digit percent of one core and the rest as free.
+
+| Resource | Used by mirroring | Free |
+|----------|-------------------|------|
+| Core 0 | ~5% | ~95% |
+| Core 1 | 0 | **all of it** |
+| SRAM (520 KB) | 230 KB double-buffered + ~80 KB code | **~210 KB** |
+| PSRAM (8 MB) | none | **all of it** |
+| Flash (16 MB) | ~1 MB firmware | ~15 MB |
+| DMA channels (16) | 4–5 | ~11 |
+| PIO state machines (12) | 2 — SPI slave, DDC | ~10 |
+| Scanout memory bandwidth | 13.8 MB/s | hundreds available |
+
+`clk_hstx` is a separate clock generator on the RP2350, so HSTX can run at the 126 MHz that
+640×480 DVI needs while `clk_sys` runs independently. **The video timing does not constrain
+what the cores are clocked at.**
+
+So core 1 can render a display-list surface while core 0 handles the mirror and scanout,
+with the compositor merging them at scanout time. The two modes coexist.
+
+#### The bezel — a v1.1 feature the headroom pays for
+
+**The 80 px pillarbox bars either side are dead screen space**, and compositing into them
+costs a few more DMA descriptors and some of a core that is otherwise idle.
+
+Badge battery, WiFi state, app name, a clock, an FPS readout — a proper bezel around the
+mirrored circle. It is close to free, and it is the difference between output that looks
+designed and output that looks letterboxed. Not v1: get the mirror working first, then this
+is the obvious next thing.
+
+The same headroom also affords screenshots and capture to microSD (115 KB/frame, so
+full-rate video is marginal over SPI but stills and low-rate capture are comfortable), and
+HDMI audio data islands.
+
+#### What would consume it
+
+Materialising a full-resolution framebuffer. 614 KB does not fit in SRAM, so it moves to
+PSRAM and pulls ~37 MB/s of scanout bandwidth — the mode rated "needs measurement" in §3.3.
+That is precisely why scale-during-scanout is the right approach for the primary path, and
+why the primary path leaves the second core untouched.
+
 ## 4. Hardware architecture
 
 ```
