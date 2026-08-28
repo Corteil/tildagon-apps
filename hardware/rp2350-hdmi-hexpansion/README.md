@@ -25,13 +25,13 @@ Pads 1–10 are on the bottom copper, 11–20 on the top copper.
 | 1 | GND | 11 | GND |
 | 2 | LS_A | 12 | HS_F |
 | 3 | LS_B | 13 | HS_G |
-| 4 | SDA | 14 | GND |
-| 5 | SCL | 15 | +3V3 |
-| 6 | HEXP_DET | 16 | +3V3 |
-| 7 | LS_C | 17 | GND |
-| 8 | LS_D | 18 | HS_H |
-| 9 | LS_E | 19 | HS_I |
-| 10 | GND | 20 | GND |
+| 7 | SDA | 14 | GND |
+| 8 | SCL | 15 | +3V3 |
+| 9 | HEXP_DET | 16 | +3V3 |
+| 10 | LS_C | 17 | GND |
+| 11 | LS_D | 18 | HS_H |
+| 12 | LS_E | 19 | HS_I |
+| 13 | GND | 20 | GND |
 
 Source: `hexpansion/hexpansion.kicad_sch` + `tildagon.pretty/hexpansion-edge-connector.kicad_mod`.
 
@@ -150,9 +150,10 @@ A hexpansion that:
    that image, so the driver updates itself with the hexpansion firmware — no separate
    EEPROM flashing step, ever.
 4. Accepts drawing commands from the badge over a **SPI link on the four HS pins**.
-5. Takes **USB-C power** so it does not flatten the badge battery, and offers the full
-   debug surface: UF2 and a USB CDC console over the same connector, plus a **3-pin SWD
-   connector** for a Raspberry Pi Debug Probe.
+5. Takes **USB-C power** so it does not flatten the badge battery — powering this board
+   only, never the badge, under any condition (§4.5) — and offers the full debug surface:
+   UF2 and a USB CDC console over the same connector, plus a **3-pin SWD connector** for a
+   Raspberry Pi Debug Probe.
 6. Exposes **two Qwiic / STEMMA QT sockets** on their own I2C bus, which the badge can
    also reach through the GFX card as an I2C bridge.
 7. Is built on a **44 mm across-flats hexagon** rather than the 32 mm template — the
@@ -217,10 +218,10 @@ Ship v1 on the first row. Everything else is a firmware update.
           │              └───────────┴────────────┘
           │                          │
   ┌───────▼───────┐          ┌───────▼────────┐        ┌──────────────┐
-  │ TPS61023      │          │   RP2350A      │◄──QSPI─┤ W25Q128 16MB │
-  │ 3V3→5V, 55 mA │          │   QFN-60       │  CS0   └──────────────┘
-  └───────┬───────┘          │  L1 3.3 µH     │        ┌──────────────┐
-          │                  │  Y1 12 MHz     │◄──QSPI─┤ APS6404 8 MB │
+  │ TPS2116 mux   │          │   RP2350A      │◄──QSPI─┤ W25Q128 16MB │
+  │ prio USB, rev-│          │   QFN-60       │  CS0   └──────────────┘
+  │ blocking BOTH │          │  L1 3.3 µH     │        ┌──────────────┐
+  └───────┬───────┘          │  Y1 12 MHz     │◄──QSPI─┤ APS6404 8 MB │
           │                  └─┬──┬──┬──┬──┬──┘  CS1   └──────────────┘
           │      HSTX 12–19    │  │  │  │  │ SWD
           │             ┌──────▼┐ │  │  │  └──────► J3  3-pin JST-SH debug
@@ -231,7 +232,10 @@ Ship v1 on the first row. Everything else is a firmware update.
           │                    │  └─PIO I2C 3/4────► PCA9306 ──► DDC / EDID
           └──────── +5V ───────┴─────────────────────────────► J1 mini-HDMI (C)
 
-  J2 USB-C ─► power OR-ing (Q1/Q2) + USB D±   SW1 BOOT   SW2 RESET
+  J2 USB-C ─► TVS + 5k1 CC ─► buck 5V→3V3 ─► mux input A (priority)
+              USB D± ─────────────────────────► RP2350
+  3V3_LOCAL ─► TPS61023 boost ─► V5_HDMI  (only 5 V source; never muxed to VBUS)
+  SW1 BOOT   SW2 RESET   badge-rail sense ─► GPIO
   LED1 power (always on)   LED2 status (GPIO1)   LED3 SK6805 RGB
 
   Flats:  outer = J1 + J2   ·   side A = J4 + J5   ·   side B = J6
@@ -345,7 +349,69 @@ The costs are that it stops looking like a Tildagon hexagon, and more mass hangs
 1.0 mm card edge and two M2 screws. **Recommendation: build the 44 mm hexagon; hold the
 wedge in reserve for if the outer-flat placement study fails.**
 
-### 4.5 Points that need care
+### 4.5 Power domains and badge isolation
+
+> **Design rule: the hexpansion never powers the badge.** Not in normal operation, not
+> during insertion or removal, not under a single-component failure. USB-C powers this
+> board only. The badge's BQ25895 stays the sole authority over the badge's own rails.
+
+Everything below exists to enforce that rule.
+
+| Rail | Source | Notes |
+|------|--------|-------|
+| `VBUS` | USB-C J2 | 5 V. TVS + USBLC6 ESD, 5k1 CC1/CC2 pulldowns |
+| `3V3_USB` | Buck from `VBUS` | The local rail when USB is present |
+| `3V3_BADGE` | Edge pads 15/16 | 600 mA through the badge's MT9700 load switch |
+| `3V3_LOCAL` | TPS2116 mux, priority to `3V3_USB` | Powers everything on the board |
+| `V5_HDMI` | Boost from `3V3_LOCAL` | The only 5 V source on the board — never muxed with `VBUS` |
+
+#### The four backfeed paths
+
+| # | Path | If unhandled | Mitigation |
+|--:|------|--------------|------------|
+| 1 | 5 V `VBUS` reaches the badge's 3V3 rail | Destroys the ESP32-S3, both AW9523s, the TCA9548A, the display and the IMU | `VBUS` never leaves the USB domain: it feeds only the buck. The TPS2116 blocks reverse current on its badge input, so even a shorted buck cannot push 5 V outward |
+| 2 | USB-derived 3V3 backfeeds pads 15/16 | Flows through the badge's load-switch body diode into `3V3_SYS`. The badge loses the ability to power the port off, and its whole rail is back-powered from your USB supply | TPS2116 priority mux with true reverse-current blocking and break-before-make. When USB is present the badge input is hard-isolated |
+| 3 | Our GPIOs drive badge pins while the badge is unpowered | Phantom-powers the badge through ESP32/AW9523 ESD diodes — latch-up, pin damage | Only two pins can source: MISO (HS_H) and the LS_B interrupt. Firmware holds both tri-stated until the badge-rail sense reads live. 33 Ω series on the HS lines caps fault current |
+| 4 | The boost drives `VBUS` backwards | 5 V on the USB-C connector: spec violation, hazard to whatever is plugged in | Deleted by construction — the HDMI 5 V rail is never muxed with `VBUS` |
+
+#### Why a mux and not a pair of FETs
+
+The earlier revision said "supply OR-ing (Q1/Q2)" without a topology, and two P-FETs
+described that loosely do not do the job: **a single P-FET always has a body diode**, and
+whichever way you orient it one direction conducts. Blocking both ways needs back-to-back
+FETs plus their gate drive — four parts and a switchover behaviour you have to get right
+yourself.
+
+A **TPS2116** does it in one part: two inputs, automatic priority, genuine reverse-current
+blocking on both, break-before-make. `3V3_USB` is input A with priority; `3V3_BADGE` is
+input B. Q1/Q2 come out of the BOM.
+
+Path 2 deserves emphasis. A high-side P-FET load switch conducts OUT→IN through its body
+diode when the output is pulled above the input, unless the part explicitly blocks reverse
+current — and the MT9700/AAT4610 class does not advertise that. So without the mux, running
+on USB back-feeds the badge's `3V3_SYS` **even with the port switched off in software**.
+The datasheet in `badge-2024-hardware/datasheets/` is a scanned image and cannot be
+searched, so this is assumed until confirmed — which is the correct posture regardless.
+
+#### Path 3 is mostly free
+
+Of our badge-facing signals, SDA and SCL are open-drain — they only ever pull low, so they
+cannot inject current into an unpowered bus. SCK, MOSI and CS are inputs to us. That leaves
+**exactly two sourcing outputs**: MISO on HS_H, and the attention line on LS_B. So:
+
+* Divide `3V3_BADGE` through 100k/100k to a GPIO as a **badge-presence sense**.
+* Firmware tri-states MISO and LS_B until that sense reads live, and re-tri-states them if
+  it drops. This doubles as the RP2350 knowing whether it is in a badge or standalone.
+* **33 Ω series on each HS line.** It caps fault current and doubles as source-series
+  termination, which 40 MHz edges want anyway.
+
+#### USB-C sink requirements
+
+* **5k1 CC1/CC2 pulldowns.** Without them a Type-C source delivers nothing at all.
+* Nothing on the board may present as a source.
+* **TVS on `VBUS`** so a misbehaving PD supply cannot exceed the buck's input rating.
+
+### 4.6 Points that need care
 
 * **Mini-HDMI Type C does not share Type A's pin assignment.** The 19 pins are reordered.
   Wire the schematic from the chosen connector's datasheet — do not adapt a Type A
@@ -365,7 +431,7 @@ wedge in reserve for if the outer-flat placement study fails.**
 * **Inrush.** The MT9700 will trip at 600 mA. Keep total bulk capacitance modest
   (≈ 40 µF) and stagger the boost enable, or the hexpansion will fail to power on.
 
-### 4.6 Power budget
+### 4.7 Power budget
 
 | Rail / block | Est. current @3V3 |
 |--------------|------------------:|
@@ -381,8 +447,12 @@ wedge in reserve for if the outer-flat placement study fails.**
 | Headroom left for attached Qwiic devices | ~100 mA (shared with SD bursts) |
 
 Comfortably inside 600 mA — but ~0.9 W is a real load on a badge battery. Expect
-**2–3 hours** of badge runtime with the GFX card live on badge power alone. With USB-C
-plugged in, the hexpansion powers itself and the badge is untouched.
+**2–3 hours** of badge runtime with the GFX card live on badge power alone.
+
+On USB the same 264 mA at 3.3 V is ~0.87 W, so `VBUS` draws about **195 mA at 5 V** through
+a 90 %-efficient buck — well inside a USB 2.0 port's 500 mA, no PD negotiation needed. With
+USB-C plugged in the hexpansion powers itself and **draws nothing at all from the badge**;
+the TPS2116 hard-isolates the badge input rather than merely sharing the load (§4.5).
 
 ---
 
@@ -418,7 +488,8 @@ no cable.
 
 ## 6. Bill of materials
 
-Per board. Prices are LCSC/JLCPCB indicative in USD *(est.)* — **verify at order time**,
+Per board, 92 fitted placements (U8 is DNP and excluded from the totals). Prices are
+LCSC/JLCPCB indicative in USD *(est.)* — **verify at order time**,
 they move constantly and the RP2350A in particular has swung between $1.03 and $1.71.
 
 | # | Ref | Part | Package | Qty | @10 | @50 |
@@ -433,20 +504,23 @@ they move constantly and the RP2350A in particular has swung between $1.03 and $
 | 8 | J1 | **Mini-HDMI Type C receptacle**, right-angle | SMD | 1 | 0.65 | 0.52 |
 | 9 | J2 | USB-C 16P receptacle (power + UF2 + CDC) | SMD | 1 | 0.30 | 0.24 |
 | 10 | J3 | **JST-SH 3-pin, RPi debug standard** (SM03B-SRSS-TB) | SMD | 1 | 0.12 | 0.10 |
-| 11 | J4,J5 | **JST-SH 4-pin Qwiic** (SM04B-SRSS-TB) | SMD | 2 | 0.26 | 0.22 |
+| 14 | J4,J5 | **JST-SH 4-pin Qwiic** (SM04B-SRSS-TB) | SMD | 2 | 0.26 | 0.22 |
 | 11b | J6 | **microSD socket, push-push** | SMD | 1 | 0.35 | 0.30 |
 | 12 | D1 | USBLC6-2SC6 USB ESD | SOT-23-6 | 1 | 0.10 | 0.08 |
-| 13 | Q1,Q2 | AO3401 P-FET, supply OR-ing | SOT-23 | 2 | 0.12 | 0.10 |
+| 13 | U9 | **TPS2116 power mux** — priority + reverse blocking | SOT-23-6 | 1 | 0.55 | 0.45 |
+| 13b | U10 | **Buck 5V→3V3**, ≥500 mA (AP3417 / TPS62203) | SOT-23-5 | 1 | 0.35 | 0.28 |
+| 13c | L3 | 2.2 µH shielded (USB buck) | 0805 | 1 | 0.09 | 0.07 |
+| 13d | D2 | TVS on VBUS (SMF5.0A) | SOD-123 | 1 | 0.05 | 0.04 |
 | 14 | Y1 | 12 MHz crystal, ±30 ppm | 3225 | 1 | 0.16 | 0.13 |
 | 15 | L1 | 3.3 µH shielded (RP2350 VREG_LX) | 0805 | 1 | 0.10 | 0.08 |
 | 16 | L2 | 2.2 µH shielded (boost) | 0805 | 1 | 0.09 | 0.07 |
 | 17 | FB1,FB2 | Ferrite bead 600 Ω @100 MHz | 0402 | 2 | 0.04 | 0.03 |
-| 18 | C | 22 µF bulk / 10 µF / 1 µF / 100 nF / 15 pF | 0805–0402 | 30 | 0.30 | 0.23 |
-| 19 | R | Pulls, dividers, Qwiic 4k7, SD pulls, LED resistors | 0402 | 24 | 0.08 | 0.05 |
+| 18 | C | 22 µF bulk / 10 µF / 1 µF / 100 nF / 15 pF | 0805–0402 | 34 | 0.34 | 0.26 |
+| 19 | R | Pulls, dividers, Qwiic 4k7, SD pulls, **5k1 CC**, **badge sense**, **33 Ω HS series**, LED | 0402 | 30 | 0.10 | 0.06 |
 | 20 | SW1,SW2 | **Tactile switches — BOOT and RESET** | 3×2 mm | 2 | 0.12 | 0.10 |
 | 21 | LED1,LED2 | **Power (always on) + status** | 0603 | 2 | 0.04 | 0.04 |
 | 22 | LED3 | SK6805 RGB status | 2427 | 1 | 0.08 | 0.06 |
-| | | **Total parts / board** | | **79 placements** | **$8.35** | **$6.95** |
+| | | **Total parts / board** | | **92 fitted** | **$9.20** | **$7.53** |
 
 Machine-readable version: [`bom.csv`](bom.csv).
 
@@ -468,7 +542,7 @@ Turnkey PCBA at JLCPCB, delivered to the UK. Fee structure from JLCPCB's publish
 rates (setup ≈ $8/side, feeder ≈ $1.50 per extended part type, stencil ≈ $1.50,
 SMT labour ≈ $0.0017/joint with a $0.48/board floor). Board is a **44 mm across-flats
 hexagon** (44 × 50.8 mm bounding box, 16.8 cm²), 4-layer, 1.0 mm, ENIG,
-impedance-controlled, ~330 solder joints, ~17 extended part types,
+impedance-controlled, ~360 solder joints, ~19 extended part types,
 **double-sided assembly**.
 
 | Line | 10 boards | 20 boards | 50 boards |
@@ -476,56 +550,56 @@ impedance-controlled, ~330 solder joints, ~17 extended part types,
 | PCB fab (4L, 1.0 mm, ENIG, imp. ctrl) | $42 | $64 | $135 |
 | Stencils (2 sides) | $3 | $3 | $3 |
 | SMT setup (2 sides) | $16 | $16 | $16 |
-| Feeder fees (~17 extended parts) | $26 | $26 | $26 |
-| SMT labour | $6 | $11 | $28 |
+| Feeder fees (~19 extended parts) | $29 | $29 | $29 |
+| SMT labour | $6 | $12 | $31 |
 | X-ray (QFN-60) contingency | $10 | $10 | $10 |
-| Components (incl. MOQ overshoot) | $109 | $183 | $365 |
-| **Subtotal, ex-works** | **$212** | **$313** | **$583** |
+| Components (incl. MOQ overshoot) | $120 | $201 | $395 |
+| **Subtotal, ex-works** | **$226** | **$335** | **$619** |
 | Air freight to UK | $24 | $28 | $38 |
-| UK import VAT @20% | $47 | $68 | $124 |
+| UK import VAT @20% | $50 | $73 | $131 |
 | Courier disbursement fee | $15 | $15 | $15 |
-| **Delivered total** | **$298** | **$424** | **$760** |
-| **Per board** | **$29.80** | **$21.20** | **$15.20** |
-| *Per board, £ @1.27* | *£23.46* | *£16.69* | *£11.97* |
+| **Delivered total** | **$315** | **$451** | **$803** |
+| **Per board** | **$31.50** | **$22.55** | **$16.06** |
+| *Per board, £ @1.27* | *£24.80* | *£17.76* | *£12.65* |
 
-### What the bigger board actually cost
+### How the price has moved
 
-| | 32 mm hexagon | 44 mm hexagon | Delta |
-|---|---:|---:|---:|
-| Area | 8.9 cm² | 16.8 cm² | +89% |
-| 10 boards, per board | $26.90 | $29.80 | +$2.90 |
-| 20 boards, per board | $19.10 | $21.20 | +$2.10 |
-| 50 boards, per board | $13.28 | $15.20 | +$1.92 |
+| Revision | What changed | 50-board, per board |
+|----------|--------------|--------------------:|
+| Mini-HDMI, USB-C, SWD, buttons, Qwiic — 32 mm hexagon | — | $13.28 |
+| Grown to 44 mm across flats, microSD restored | +89% board area, SD socket | $15.20 (+$1.92) |
+| **Power-domain isolation** | **TPS2116 mux, USB buck, TVS, CC and sense resistors** | **$16.06 (+$0.86)** |
 
-**Roughly two dollars a board to nearly double the area, and it is what makes the
-connectors fit at all.** Take the space. PCB fabrication is only 14–18% of the run cost,
-so board area is one of the cheapest things you can spend on here — far cheaper than a
-respin caused by a placement that would not close.
+Two of those are worth reading as value, not cost. **$1.92 nearly doubled the board area**
+and is what makes the connectors fit at all — PCB fabrication is only 14–17% of the run, so
+area is among the cheapest things you can buy here, and far cheaper than a respin. And
+**$0.86 is what stands between a USB cable and a dead badge**; the alternative is not a
+cheaper board, it is an unprotected one.
 
-The shape of the cost curve is otherwise unchanged: **$55 of the cost is fixed** (setup,
-feeders, stencils, X-ray) regardless of quantity. At 10 boards you pay $5.50/board just to
-turn the machine on; at 50 it is $1.10. If there is any chance of wanting 50, order 50.
+The fixed-cost shape is unchanged: **$58 of the cost is fixed** (setup, feeders, stencils,
+X-ray) regardless of quantity. At 10 boards you pay $5.80/board just to turn the machine
+on; at 50 it is $1.16. If there is any chance of wanting 50, order 50.
 
 ### One-off NRE, not included above
 
 | Item | Est. |
 |------|-----:|
-| 5-board prototype spin (same process) | $210 |
-| Second spin, assume one is needed | $210 |
+| 5-board prototype spin (same process) | $220 |
+| Second spin, assume one is needed | $220 |
 | Raspberry Pi Debug Probe, mini-HDMI cable, test monitor, M2 hardware | $55 |
-| **Total NRE** | **~$475** |
+| **Total NRE** | **~$495** |
 
-Fully loaded, a 50-board run lands at roughly **$25/board**; a 20-board run at
-**$44/board**.
+Fully loaded, a 50-board run lands at roughly **$26/board**; a 20-board run at
+**$47/board**.
 
 ### Should you hand-assemble instead?
 
 | | 10 boards | 50 boards |
 |---|---:|---:|
-| Turnkey PCBA, delivered | $298 | $760 |
-| PCB + parts + own reflow, delivered | ~$237 | ~$673 |
-| Saving | $61 | $87 |
-| Your time | ~9 h | ~34 h |
+| Turnkey PCBA, delivered | $315 | $803 |
+| PCB + parts + own reflow, delivered | ~$250 | ~$709 |
+| Saving | $65 | $94 |
+| Your time | ~10 h | ~36 h |
 
 **No.** You would be buying your own labour at under $3/hour to hand-place a 0.4 mm-pitch
 QFN-60, an HDMI shell, a microSD cage and three JST-SH connectors, with yield risk on top.
@@ -558,7 +632,11 @@ things that could kill the design:
 2. **SPI link speed.** Sweep 10→40 MHz over the HS pins with the real edge connector in
    circuit. Record the highest reliable rate and the MicroPython-side throughput.
 3. **HSTX DVI at 320×240 doubled**, running from the badge's 3V3 with a current meter
-   inline, to validate §4.6.
+   inline, to validate §4.7.
+4. **Backfeed check.** With the badge powered off and USB-C live, measure the current into
+   pads 15/16 and the voltage on the badge's `3V3_SYS`. Both must read zero. Repeat with
+   the badge on and the port disabled in software. This is the test that proves §4.5, and
+   it is worth building a jig for.
 
 Everything downstream is cheap to change now and expensive to change later. Do not skip
 this phase.
@@ -579,7 +657,8 @@ USB-C to a side flat, or switch to the radial wedge outline. Request VID/PID in 
 
 ### Phase 3 — Firmware (4–6 weeks part-time)
 
-Pico SDK in C. Order of work: boot + flash/PSRAM bring-up → I2C target and EEPROM
+Pico SDK in C. Order of work: badge-presence sense and tri-state-by-default on MISO/LS_B
+(this comes first — it is a safety interlock, not a feature) → boot + flash/PSRAM bring-up → I2C target and EEPROM
 emulation → HSTX DVI output → SPI slave with DMA (PIO-based, so clock-stretch and
 back-pressure are under our control) → the drawing engine → PIO-I2C DDC/EDID and mode
 negotiation → Qwiic bus and the I2C bridge commands → microSD → HDMI audio if time allows.
@@ -600,7 +679,26 @@ yet.
 |--:|------|----------|------------|
 | 1 | EEPROM emulation loses the enumeration race at power-on | **High** | Fast-boot I2C target; clock stretching; DNP 24C64 fallback footprint. Proven or disproven in Phase 0. |
 | 2 | Outer flat does not close — 25.5 mm of connectors on a 25.4 mm flat | **High** | Placement study is the first task in Phase 1. Fallbacks in order: drop microSD and move USB-C to a side flat; then the radial wedge outline (§4.4). |
-| 3 | SPI link slower than 40 MHz in practice | Medium | Display-list architecture already assumes 2.5 MB/s. Degrades to fewer draw calls, not to a broken product. |
+| 3 | USB backfeed reaches the badge's 3V3 rail | **High** | TPS2116 priority mux with reverse blocking on both inputs; `VBUS` confined to the USB domain; HDMI 5 V never muxed with `VBUS`. Bench-proven in Phase 0. |
+| 4 | Phantom-powering the badge through signal pins | Medium | Only MISO and LS_B can source; both firmware tri-stated until the badge-presence sense reads live; 33 Ω series on the HS lines. |
+| 5 | Buck fails short, putting 5 V on `3V3_LOCAL` | Medium | The mux's reverse blocking keeps it off the badge. On-board damage is accepted; add a 3.6 V clamp on `3V3_LOCAL` if the layout leaves room. |
+| 6 | SPI link slower than 40 MHz in practice | Medium | Display-list architecture already assumes 2.5 MB/s. Degrades to fewer draw calls, not to a broken product. |
+| 7 | 600 mA budget or inrush trips the port switch | Medium | Modest bulk capacitance, staged boost enable, measured in Phase 0. Qwiic devices documented as sharing ~100 mA of headroom. |
+| 8 | Mini-HDMI wired as if it were Type A | Medium | Different pin assignment; netlist from the connector datasheet, and check it at review. |
+| 9 | Neighbouring hexpansion sits 4.1 mm away, blocking side-flat cables | Medium | Fat-cable connectors are all on the outer flat by design; Qwiic and SD documented as needing the adjacent bay free. |
+| 10 | Cable strain on the edge connector — worse on an 89% larger board | Medium | Both M2 mounting holes populated; strain-relief loop documented for users. Mini-HDMI reduces leverage but has lower retention force than Type A. |
+| 11 | Badge battery life halves when the card runs on badge power | Medium | USB-C input with the TPS2116 mux — on USB the badge supplies nothing at all. |
+| 12 | TMDS signal integrity on a 1.0 mm 4-layer board | Low | Short runs, controlled impedance, proven direct-drive topology. |
+| 13 | VID/PID not assigned in time | Low | Ask in week 1; costs nothing. |
+| 14 | RP2350-E9 pull-down erratum bites on LS/CS/I2C lines | Low | External pull resistors everywhere it matters. |
+
+------|----------|------------|
+| 1 | EEPROM emulation loses the enumeration race at power-on | **High** | Fast-boot I2C target; clock stretching; DNP 24C64 fallback footprint. Proven or disproven in Phase 0. |
+| 2 | Outer flat does not close — 25.5 mm of connectors on a 25.4 mm flat | **High** | Placement study is the first task in Phase 1. Fallbacks in order: drop microSD and move USB-C to a side flat; then the radial wedge outline (§4.4). |
+| 3 | USB backfeed reaches the badge's 3V3 rail | **High** | TPS2116 priority mux with reverse blocking on both inputs; VBUS confined to the USB domain; HDMI 5 V never muxed with VBUS. Bench-proven in Phase 0. |
+| 4 | Phantom-powering the badge through signal pins | Medium | Only MISO and LS_B can source; both firmware tri-stated until badge-presence sense reads live; 33 Ω series on HS lines. |
+| 5 | Buck fails short, putting 5 V on `3V3_LOCAL` | Medium | The mux's reverse blocking keeps it off the badge. On-board damage is accepted; consider a 3.6 V clamp on `3V3_LOCAL` if the placement study leaves room. |
+| 6 | SPI link slower than 40 MHz in practice | Medium | Display-list architecture already assumes 2.5 MB/s. Degrades to fewer draw calls, not to a broken product. |
 | 4 | 600 mA budget or inrush trips the port switch | Medium | Modest bulk capacitance, staged boost enable, measured in Phase 0. Qwiic devices documented as sharing ~100 mA of headroom. |
 | 5 | Mini-HDMI wired as if it were Type A | Medium | Different pin assignment; net list from the connector datasheet, and check it at review. |
 | 6 | Badge battery life halves when the card is running | Medium | USB-C power input with supply OR-ing. |
@@ -622,6 +720,7 @@ yet.
 | Buttons | **BOOT and RESET**, both on the top face. |
 | LEDs | **Power (always on) + status on GPIO1**, plus an optional SK6805 RGB. |
 | Qwiic | **Two JST-SH 4-pin sockets in parallel** on hardware I2C1 (GPIO6/7), with jumper-removable 4k7 pull-ups. Both on side flat A. |
+| Badge power | **The hexpansion never powers the badge** — not in normal use, not during hot-plug, not under a single-component failure. Enforced by the TPS2116 mux and firmware tri-stating, not by convention. |
 | Board size | **44 mm across flats** (was the 32 mm template). Smallest size where mini-HDMI and USB-C fit on the outer flat. Costs ~$2/board. |
 | microSD | **Back in**, on SPI1 GPIO8–11, on the second side flat. First thing to cut if the placement study fails. |
 

@@ -12,7 +12,10 @@ Item,Designator,Description,MPN,LCSC,Package,Qty,UnitUSD_qty10,UnitUSD_qty50,Ext
 11,"J4,J5",JST-SH 4-pin Qwiic / STEMMA QT,SM04B-SRSS-TB,,SMD,2,0.13,0.11,0.26,0.22,Parallel on hardware I2C1 GPIO6/7; both on side flat A
 11b,J6,microSD socket push-push,,,SMD,1,0.35,0.30,0.35,0.30,On SPI1 GPIO8-11; second side flat
 12,D1,USB ESD protection,USBLC6-2SC6,,SOT-23-6,1,0.10,0.08,0.10,0.08,
-13,"Q1,Q2",P-channel MOSFET supply OR-ing,AO3401,,SOT-23,2,0.06,0.05,0.12,0.10,Prevents backfeeding the badge from USB
+13,U9,Power mux 2-input priority with reverse-current blocking,TPS2116DRLR,,SOT-23-6,1,0.55,0.45,0.55,0.45,Isolates badge 3V3 whenever USB present - the badge is never powered by this board
+13b,U10,Buck regulator 5V to 3V3 >=500 mA,AP3417 / TPS62203,,SOT-23-5,1,0.35,0.28,0.35,0.28,Feeds mux input A from VBUS
+13c,L3,2.2 uH shielded inductor,,,0805,1,0.09,0.07,0.09,0.07,USB buck
+13d,D2,TVS 5.0 V on VBUS,SMF5.0A,,SOD-123,1,0.05,0.04,0.05,0.04,Protects buck input from a misbehaving PD supply
 14,Y1,12 MHz crystal +/-30 ppm,,,3225,1,0.16,0.13,0.16,0.13,RP2350 reference clock
 15,L1,3.3 uH shielded inductor,,,0805,1,0.10,0.08,0.10,0.08,RP2350 VREG_LX core buck
 16,L2,2.2 uH shielded inductor,,,0805,1,0.09,0.07,0.09,0.07,Boost converter
@@ -20,10 +23,10 @@ Item,Designator,Description,MPN,LCSC,Package,Qty,UnitUSD_qty10,UnitUSD_qty50,Ext
 18,C1-C2,22 uF 6.3 V X5R,,,0805,2,0.05,0.04,0.10,0.08,Keep total bulk near 40 uF for inrush
 19,C3-C6,10 uF 6.3 V X5R,,,0603,4,0.02,0.015,0.08,0.06,
 20,C7-C10,1 uF 16 V X7R,,,0402,4,0.01,0.008,0.04,0.03,
-21,C11-C28,100 nF 16 V X7R,,,0402,18,0.004,0.003,0.07,0.05,Decoupling
+21,C11-C32,100 nF 16 V X7R + buck in/out,,,0402,22,0.004,0.003,0.09,0.07,Decoupling
 22,"C29,C30",15 pF C0G,,,0402,2,0.004,0.003,0.01,0.01,Crystal load
-23,R1-R24,Pulls / dividers / Qwiic 4k7 / SD pulls / LED resistors,,,0402,24,0.003,0.002,0.08,0.05,External pulls required - RP2350-E9 erratum; Qwiic pull-ups on solder jumper
+23,R1-R30,Pulls / dividers / Qwiic 4k7 / SD pulls / 5k1 CC / badge sense / 33R HS series / LED,,,0402,30,0.003,0.002,0.10,0.06,5k1 CC1/CC2 mandatory for USB-C sink; 33R doubles as HS source termination
 24,"SW1,SW2",Tactile switch - BOOT and RESET,,,3x2 mm,2,0.06,0.05,0.12,0.10,RESET pulls RUN low; shares pin with badge LS_A
 25,"LED1,LED2",Power LED (always on) + status LED,,,0603,2,0.02,0.02,0.04,0.04,LED1 on 4k7 for ~0.4 mA; LED2 on GPIO1
 26,LED3,SK6805 RGB status LED,,,2427,1,0.08,0.06,0.08,0.06,Optional
-,,,,,,79 placements,,,8.35,6.95,Totals per board
+,,,,,,92 fitted placements,,,9.20,7.53,Totals per board excluding the DNP EEPROM
