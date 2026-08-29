@@ -137,6 +137,48 @@ the one item with an external dependency and zero cost.
 
 ---
 
+### 1.5 The badge's graphics stack
+
+Checked against the firmware rather than the documentation, because what the headers
+advertise and what this build implements are two different things.
+
+**The badge uses exactly one graphics library: `ctx`**, by Øyvind Kolås — an immediate-mode
+2D vector library with an HTML5-canvas-shaped API. Single header, 83,760 lines,
+LGPL-3.0-or-later, vendored at commit `26287002`. Apps reach it through **uctx**, the
+MicroPython binding in `drivers/gc9a01/mp_uctx.c` (1,196 lines), which is what
+`display.get_ctx()` returns.
+
+From `components/ctx/ctx_config.h`:
+
+| Setting | Value |
+|---------|-------|
+| Pixel formats | **RGB565 and RGB565_BYTESWAPPED**, plus RGBA8, RGB332, RGB8, GRAY1/2/4/8, GRAYA8, YUV420 |
+| Antialiasing | `CTX_RASTERIZER_AA 5`, dithering on, `CTX_STROKE_1PX` |
+| Fonts | **One** — `EMFCampFont`. Three slots exist; a comment notes the partition is full |
+| Images | stb_image, **PNG/GIF/JPEG only**; `CTX_MAX_TEXTURES 32` |
+| Build | baremetal, `-Oz`, one font engine, no threads, no tiling |
+
+#### `st3m` is a shim, and its header is misleading
+
+`components/st3m/` is inherited from the flow3r badge. `st3m_gfx.h` advertises a rich
+pipeline — `st3m_gfx_2x`/`3x`/`4x` pixel-doubling, an OSD overlay layer, 1/2/4/8-bit
+palette modes, `st3m_gfx_smart_redraw`, `st3m_gfx_fbconfig` for virtual viewports, and a
+`st3m_gfx_fb()` framebuffer accessor.
+
+**Almost none of it is implemented here.** `st3m_gfx.c` is 283 lines defining five
+functions: `init`, `fps`, `fps_update`, `splash`, `show_textview`. The Tildagon port
+replaced the pipeline with the simple `tildagon_fb` + direct blit in
+`drivers/gc9a01/display.c` (§3.1). Read that header as flow3r's ambitions, not this
+badge's capabilities.
+
+Two consequences:
+
+* **No shortcut for the `get_fb()` patch.** `st3m_gfx_fb()` is a declaration with no body,
+  so the upstream change still has to expose the `tildagon_fb` static. Scope unchanged.
+* **§3.1's dirty-region claim is verified, not assumed.** `st3m_gfx_smart_redraw` exists
+  only as an enum value; nothing implements it. The badge genuinely does not track what
+  changed, and ctx redraws the whole frame.
+
 ## 2. Product definition
 
 **Primary mode: the badge's own screen, on a monitor.** The hexpansion mirrors the
@@ -255,21 +297,55 @@ never visible on the badge. On HDMI they would be. **The circular mask is on by 
 so the monitor shows what the wearer sees; a runtime toggle reveals the full square for
 debugging.
 
-### 3.2 Advanced — the display list
+### 3.2 Advanced — forwarding ctx drawlists
 
-For apps that want more than 240×240, the arithmetic is unforgiving. 40 MHz SPI is ~5 MB/s
-at best; a 640×480 16 bpp frame is 614 KB, so pushing full frames gives **8 fps** before
-any MicroPython overhead. So at full resolution **the badge sends a display list, not
-pixels** — the RP2350 holds the assets and renders. Asset upload is the only bulk
-transfer and happens once; a full-screen 60 fps scene then costs a few hundred bytes per
-frame.
+For apps that want more than 240×240, the naive approach is unaffordable: 40 MHz SPI is
+~5 MB/s at best, a 640×480 16 bpp frame is 614 KB, so pushing full frames gives **8 fps**
+before any MicroPython overhead. At full resolution the badge has to send *what to draw*,
+not pixels.
+
+**The badge already produces exactly that, in a portable format.** ctx is a display-list
+library — it records a drawlist and rasterises it — and both directions of its
+serialisation are compiled in: `CTX_FORMATTER` and `CTX_PARSER` default to 1 and are not
+overridden in `ctx_config.h`. **`ctx.parse()` is already exposed to MicroPython**
+(`mp_uctx.c:950`).
+
+So the preferred shape for this mode is **forwarding ctx's own drawlists** and running the
+same rasteriser on the RP2350, rather than inventing a bespoke command set. What that buys:
+
+* **Resolution independence.** The RP2350 rasterises at native 640×480 instead of doubling
+  240×240 pixels — vector output, properly sharp, not scaled.
+* **Unmodified apps benefit**, exactly as with mirroring. No API for app authors to learn,
+  which is the same property that makes the primary mode worth building.
+* **Compact on the wire.** A drawlist is a few hundred bytes to a few KB per frame against
+  614 KB of pixels.
+* **No protocol to design, document or version.** ctx already did it.
+
+What it needs before it can be committed to:
+
+| Requirement | Status |
+|-------------|--------|
+| A firmware hook to capture the drawlist | A **second** upstream ask, beyond `display.get_fb()` |
+| ctx built for RP2350 | Portable single-header C, but 84k lines — a real dependency |
+| **Rasterisation performance at 640×480 on an RP2350** | **Open question.** §3.4 says there is a free core and 8 MB of PSRAM to spend, but nobody has measured it |
+| LGPL-3.0-or-later review | Fine for firmware, but a deliberate decision rather than an assumption |
+
+None of that gates v1 — mirroring does not depend on any of it. Treat drawlist forwarding
+as the intended direction for the advanced path, to be confirmed once the mirror works.
+
+#### The command set that remains either way
+
+Drawlists cover drawing. They do not cover mirror control, bulk asset transfer, audio, the
+I2C bridge or housekeeping, so a thin command layer sits alongside whichever rendering path
+is in use:
 
 | Class | Commands |
 |-------|----------|
 | **Mirror** | `mirror_config` (scale, mask, background) · `mirror_frame` · `mirror_rect` · `resync` |
+| **Drawlist** | `ctx_drawlist` (forwarded ctx protocol) · `ctx_reset` |
 | Mode | `set_mode`, `get_edid`, `blank`, `set_palette` |
 | Assets | `upload_asset` (to flash or PSRAM), `free_asset`, `list_assets` |
-| Draw | `clear`, `rect`, `line`, `blit`, `blit_rect`, `blit_scaled`, `text`, `tilemap`, `sprite_batch` |
+| Draw | `clear`, `rect`, `line`, `blit`, `blit_rect`, `blit_scaled`, `text`, `tilemap`, `sprite_batch` — the bespoke fallback, if drawlist forwarding does not work out |
 | Frame | `present` (flip), `vsync_wait`, `set_layer` |
 | Audio | `queue_pcm` (HDMI audio data islands — no extra pins needed) |
 | Bridge | `i2c_scan`, `i2c_txn` — badge reaches the Qwiic bus through the card |
@@ -879,6 +955,7 @@ primary mode.
 | 14 | TMDS signal integrity on a 1.0 mm 4-layer board | Low | Short runs, controlled impedance, proven direct-drive topology. |
 | 15 | VID/PID not assigned in time | Low | Ask in week 1; costs nothing. |
 | 16 | RP2350-E9 pull-down erratum bites on LS/CS/I2C lines | Low | External pull resistors everywhere it matters. |
+| 17 | ctx drawlist forwarding proves impractical — second firmware hook refused, or 640×480 rasterisation too slow on RP2350 | Low | Affects the advanced path only; v1 mirroring depends on none of it. Fallback is the bespoke command set in §3.2, which is already specified. |
 
 ---
 
@@ -902,4 +979,5 @@ primary mode.
 
 * **Run size.** The fixed-cost curve in §7 says 50 if there is any chance of 50.
 * **Whether the outer flat closes at 44 mm**, or the board wants the wedge outline. Decided by the placement study, not now.
+* **Whether ctx drawlist forwarding is viable** — needs a rasterisation benchmark on RP2350 hardware and an LGPL-3.0+ review. Not on the v1 path.
 * **Whether microSD earns its place.** 16 MB of flash plus USB-C asset loading may make it redundant.
