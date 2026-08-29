@@ -867,31 +867,75 @@ lead time when you kill a board on the bench.
 
 ## 8. Delivery plan
 
-### Phase 0 — De-risk on hardware you already have (2–3 weekends, ~$40)
+### Phase 0 — De-risk on the bench (2–3 weekends)
 
-Before drawing a single schematic symbol. Wire a Pico 2 + DVI Sock to a badge port using
-a protoboard hexpansion (`codemyriad/protogon` or DanNixon's devkit) and settle everything
-that could kill the design:
+Before drawing a single schematic symbol. The rig:
 
-1. **EEPROM emulation enumerates reliably.** Cold-plug the hexpansion 50 times. Measure
-   the worst-case time from port power-on to the badge's first I2C read, and the RP2350's
-   time-to-I2C-ready. If these do not have clear daylight between them, §5's fallback
-   becomes the primary plan and the schematic changes.
-2. **SPI link speed.** Sweep 10→40 MHz over the HS pins with the real edge connector in
-   circuit. Record the highest reliable rate and the MicroPython-side throughput.
-   Then push a real 115,200-byte frame and time it end to end.
-3. **What the badge actually renders.** Log `display.get_fps()` across a handful of real
-   apps. If it comes in around 15 fps, the link has enormous headroom and the mirror
-   design gets simpler; if it is near 40, dirty-rect support moves into v1. This is the
-   measurement that decides how much work §3.1 needs.
-4. **Prototype `display.get_fb()`** against a local firmware build, so the upstream ask is
-   a tested patch rather than a feature request.
-5. **HSTX DVI at 240×240 pixel-doubled**, running from the badge's 3V3 with a current
-   meter inline, to validate §4.7.
-6. **Backfeed check.** With the badge powered off and USB-C live, measure the current into
-   pads 15/16 and the voltage on the badge's `3V3_SYS`. Both must read zero. Repeat with
-   the badge on and the port disabled in software. This is the test that proves §4.5, and
-   it is worth building a jig for.
+| Item | Notes |
+|------|-------|
+| **Adafruit Metro RP2350** | RP2350**B**, 37 available GPIO, 16 MB flash, microSD, STEMMA QT. PSRAM only on the *with PSRAM* variant — check which you have |
+| **Adafruit RP2350 22-pin FPC HSTX → DVI adapter** | Mates with the Metro's HSTX port |
+| A monitor + HDMI cable, a bench current meter | |
+| A Tildagon badge | For part B |
+| A protoboard hexpansion | `codemyriad/protogon` or DanNixon's devkit — reaches the edge connector |
+
+Most of the video work needs none of the badge, so **part A can start immediately**.
+
+#### Part A — Metro only
+
+**A1. ctx rasterisation at 640×480 — do this first.** ctx is portable single-header C;
+build it under the Pico SDK, feed it a drawlist representative of a real badge app, and
+record milliseconds per frame for a typical scene and a worst case. **This settles risk 17
+and decides the shape of §3.2** — whether drawlist forwarding gives resolution-independent
+output or whether the bespoke command set stands. It is the one number nobody has, it needs
+nothing but the Metro, and everything about the advanced path waits on it. Large surfaces
+want the PSRAM variant.
+
+**A2. Scale-during-scanout.** 240×240 source in SRAM, HSTX doing horizontal doubling, DMA
+re-reading each source line vertically, and a per-line descriptor table for the circular
+mask and pillarbox. Feed it a static test image — ideally a real badge screenshot. Measure
+the actual core load against §3.4's estimated 2–5%. This validates the entire mirroring
+architecture before any of it depends on the badge.
+
+**A3. 640×480 @60 DVI output.** Confirm the timings, and confirm real monitors accept the
+signal — §3.3 says it sits at 84% of the HSTX rating, so check that holds in practice
+rather than on paper.
+
+**A4. Current draw** of RP2350 + HSTX DVI under load, to validate the first two rows of
+§4.7. The boost, badge-port and Qwiic rows cannot be checked here.
+
+**A5. Optional: prototype the pillarbox bezel** (§3.4). Pure output-side work, and it will
+tell you quickly whether the idea looks as good as it sounds.
+
+#### Part B — badge required
+
+**B1. `display.get_fps()` across a handful of real apps.** Badge only, no hexpansion needed.
+If it comes in around 15 fps the link has enormous headroom and the mirror design gets
+simpler; near 40 and dirty-rect support moves into v1. **This is the number that bounds the
+whole primary mode.**
+
+**B2. Prototype `display.get_fb()`** against a local firmware build, so the upstream ask in
+§3.2 arrives as a tested patch rather than a feature request. If you also want drawlist
+forwarding, prototype the drawlist capture hook here — one conversation upstream, two hooks.
+
+**B3. SPI link speed.** Sweep 10→40 MHz over the HS pins through the protoboard hexpansion
+with the real edge connector in circuit. Record the highest reliable rate, then push a real
+115,200-byte frame and time it end to end.
+
+**B4. EEPROM emulation enumerates reliably.** Cold-plug 50 times. Measure worst-case time
+from port power-on to the badge's first I2C read, against the RP2350's time-to-I2C-ready. If
+there is no clear daylight between them, §5's fallback becomes the primary plan and the
+schematic changes.
+
+#### What the bench cannot tell you
+
+* **The pin budget.** The Metro is an RP2350**B** with 37 GPIO; the hexpansion specs an
+  RP2350**A** with 30, and §4.1 is tight precisely because of that — the SD card was forced
+  onto SPI1 `{8,9,10,11}` as the only group left. **Anything that works on the Metro must be
+  re-checked against §4.1 before it means anything for the board.**
+* **Signal integrity.** Adafruit's adapter has its own buffering; our board direct-drives
+  from GPIO. Functional results transfer, SI results do not.
+* **The backfeed test (§4.5)** needs the real power topology and moves to Phase 2.
 
 Everything downstream is cheap to change now and expensive to change later. Do not skip
 this phase.
@@ -910,6 +954,11 @@ USB-C to a side flat, or switch to the radial wedge outline. Request VID/PID **a
 both are short work on someone else's schedule.
 
 ### Phase 2 — Prototype run (5 boards, ~2 weeks lead time)
+
+First thing on arrival, the **backfeed check** that Phase 0 could not do: with the badge
+powered off and USB-C live, measure the current into pads 15/16 and the voltage on the
+badge's `3V3_SYS` — both must read zero. Repeat with the badge on and the port disabled in
+software. This is the test that proves §4.5, and it is worth building a jig for.
 
 ### Phase 3 — Firmware (4–6 weeks part-time)
 
@@ -941,11 +990,11 @@ primary mode.
 |--:|------|----------|------------|
 | 1 | EEPROM emulation loses the enumeration race at power-on | **High** | Fast-boot I2C target; clock stretching; DNP 24C64 fallback footprint. Proven or disproven in Phase 0. |
 | 2 | Outer flat does not close — 25.5 mm of connectors on a 25.4 mm flat | **High** | Placement study is the first task in Phase 1. Fallbacks in order: drop microSD and move USB-C to a side flat; then the radial wedge outline (§4.4). |
-| 3 | USB backfeed reaches the badge's 3V3 rail | **High** | TPS2116 priority mux with reverse blocking on both inputs; `VBUS` confined to the USB domain; HDMI 5 V never muxed with `VBUS`. Bench-proven in Phase 0. |
+| 3 | USB backfeed reaches the badge's 3V3 rail | **High** | TPS2116 priority mux with reverse blocking on both inputs; `VBUS` confined to the USB domain; HDMI 5 V never muxed with `VBUS`. Proven on the first prototype boards in Phase 2 — the Metro cannot exercise the real power topology. |
 | 4 | **`display.get_fb()` never lands upstream**, so nothing can read the badge framebuffer | **High** | Ask in week 1 with a tested patch from Phase 0; it is ~10 lines of C at a single choke point. If it is refused, the product falls back to display-list mode only — still a working graphics card, but it loses the "every app for free" property that makes mirroring the headline. Do not discover this late. |
 | 5 | Phantom-powering the badge through signal pins | Medium | Only MISO and LS_B can source; both firmware tri-stated until the badge-presence sense reads live; 33 Ω series on the HS lines. |
 | 6 | Buck fails short, putting 5 V on `3V3_LOCAL` | Medium | The mux's reverse blocking keeps it off the badge. On-board damage is accepted; add a 3.6 V clamp on `3V3_LOCAL` if the layout leaves room. |
-| 7 | 600 mA budget or inrush trips the port switch | Medium | Modest bulk capacitance, staged boost enable, measured in Phase 0. Qwiic devices documented as sharing ~100 mA of headroom. |
+| 7 | 600 mA budget or inrush trips the port switch | Medium | Modest bulk capacitance, staged boost enable. Steady-state draw is measured on the Metro in Phase 0 A4; inrush against the badge's port switch waits for Phase 2. Qwiic devices documented as sharing ~100 mA of headroom. |
 | 8 | Mini-HDMI wired as if it were Type A | Medium | Different pin assignment; netlist from the connector datasheet, and check it at review. |
 | 9 | Neighbouring hexpansion sits 4.1 mm away, blocking side-flat cables | Medium | Fat-cable connectors are all on the outer flat by design; Qwiic and SD documented as needing the adjacent bay free. |
 | 10 | Cable strain on the edge connector — worse on an 89% larger board | Medium | Both M2 mounting holes populated; strain-relief loop documented for users. Mini-HDMI reduces leverage but has lower retention force than Type A. |
@@ -955,7 +1004,7 @@ primary mode.
 | 14 | TMDS signal integrity on a 1.0 mm 4-layer board | Low | Short runs, controlled impedance, proven direct-drive topology. |
 | 15 | VID/PID not assigned in time | Low | Ask in week 1; costs nothing. |
 | 16 | RP2350-E9 pull-down erratum bites on LS/CS/I2C lines | Low | External pull resistors everywhere it matters. |
-| 17 | ctx drawlist forwarding proves impractical — second firmware hook refused, or 640×480 rasterisation too slow on RP2350 | Low | Affects the advanced path only; v1 mirroring depends on none of it. Fallback is the bespoke command set in §3.2, which is already specified. |
+| 17 | ctx drawlist forwarding proves impractical — second firmware hook refused, or 640×480 rasterisation too slow on RP2350 | Low | **Settled by Phase 0 A1**, which needs only the Metro. Affects the advanced path only; v1 mirroring depends on none of it. Fallback is the bespoke command set in §3.2, which is already specified. |
 
 ---
 
