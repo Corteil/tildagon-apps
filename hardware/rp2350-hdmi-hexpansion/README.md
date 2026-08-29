@@ -518,6 +518,15 @@ constrains this map.
 Note the mapping trades JTAG on port 1 (GPIO39–42 are the ESP32's JTAG pins) — use
 port 2 or 6 during badge-side debugging.
 
+**Why the RP2350A and not the B.** The B (QFN-80, 10×10 mm, 48 GPIO) would relax this map —
+PSRAM CS moves to GPIO47, the canonical pin every reference example uses, and UART0 comes
+back on GPIO0/1. But it doubles the package footprint from 49 mm² to 100 mm² on a board
+where §4.4 already says the outer flat closes with no slack, and escaping ~30 signals from
+an 80-pad ring is harder than from a 60-pad one, not easier. It also buys **no extra
+peripherals** — both variants have exactly 2× SPI and 2× I2C, so DDC stays on PIO either
+way. **The A is the baseline and the map below is complete and conflict-free; the B is the
+documented fallback** if Phase 0 A2 shows the A cannot bring it up.
+
 **Why the SD card forced a reshuffle.** SPI0 is already the badge slave on GPIO20–23, so
 the card needs SPI1 — whose only groups are {8,9,10,11}, {12–15} and {24–27}. HSTX owns
 12–19 and the badge I2C target owns 24/25, so **{8,9,10,11} is the only possibility**.
@@ -869,73 +878,97 @@ lead time when you kill a board on the bench.
 
 ### Phase 0 — De-risk on the bench (2–3 weekends)
 
-Before drawing a single schematic symbol. The rig:
+Before drawing a single schematic symbol.
 
-| Item | Notes |
-|------|-------|
-| **Adafruit Metro RP2350** | RP2350**B**, 37 available GPIO, 16 MB flash, microSD, STEMMA QT. PSRAM only on the *with PSRAM* variant — check which you have |
-| **Adafruit RP2350 22-pin FPC HSTX → DVI adapter** | Mates with the Metro's HSTX port |
-| A monitor + HDMI cable, a bench current meter | |
-| A Tildagon badge | For part B |
-| A protoboard hexpansion | `codemyriad/protogon` or DanNixon's devkit — reaches the edge connector |
+#### The rig
 
-Most of the video work needs none of the badge, so **part A can start immediately**.
+| Board | Variant | PSRAM | Flash | Also has |
+|-------|---------|-------|-------|----------|
+| **Adafruit Feather RP2350 + HSTX** | **RP2350A — matches the design** | none | 8 MB | STEMMA QT, 3-pin SWD, NeoPixel, **unpopulated PSRAM footprint** |
+| **Adafruit Metro RP2350** | RP2350B | **8 MB** | 16 MB — matches the BOM | microSD, STEMMA QT |
 
-#### Part A — Metro only
+Plus the Adafruit 22-pin FPC HSTX → DVI adapter (fits both), a monitor, a bench current
+meter, a Tildagon badge, and a protoboard hexpansion (`codemyriad/protogon` or DanNixon's
+devkit) for the badge-link tests.
 
-**A1. ctx rasterisation at 640×480 — do this first.** ctx is portable single-header C;
-build it under the Pico SDK, feed it a drawlist representative of a real badge app, and
-record milliseconds per frame for a typical scene and a worst case. **This settles risk 17
-and decides the shape of §3.2** — whether drawlist forwarding gives resolution-independent
-output or whether the bespoke command set stands. It is the one number nobody has, it needs
-nothing but the Metro, and everything about the advanced path waits on it. Large surfaces
-want the PSRAM variant.
+**Neither board is the design's configuration**, which is RP2350A *with* PSRAM. The Feather
+has the right silicon and no PSRAM; the Metro has PSRAM on the wrong variant, where CS sits
+on GPIO47 rather than the GPIO0 our RP2350A map is forced onto. So **QMI CS1 on GPIO0 on an
+RP2350A is unvalidated by either board** — low risk, since it is a documented pinmux option,
+but named rather than assumed (risk 18).
 
-**A2. Scale-during-scanout.** 240×240 source in SRAM, HSTX doing horizontal doubling, DMA
-re-reading each source line vertically, and a per-line descriptor table for the circular
-mask and pillarbox. Feed it a static test image — ideally a real badge screenshot. Measure
-the actual core load against §3.4's estimated 2–5%. This validates the entire mirroring
-architecture before any of it depends on the badge.
+**The fix is cheap: populate the Feather's PSRAM footprint** with an APS6404L — BOM line 3,
+about $1.15 — and it becomes an almost exact stand-in. Check Adafruit's schematic for which
+pin that pad's CS routes to. If GPIO0, the map is validated as written. If GPIO8, that
+collides with SD on SPI1 `{8,9,10,11}`, which is exactly why §4.1 puts PSRAM CS on GPIO0 —
+confirming the choice is deliberate.
 
-**A3. 640×480 @60 DVI output.** Confirm the timings, and confirm real monitors accept the
-signal — §3.3 says it sits at 84% of the HSTX rating, so check that holds in practice
-rather than on paper.
+#### Part A — Feather, the design-representative bench
 
-**A4. Current draw** of RP2350 + HSTX DVI under load, to validate the first two rows of
-§4.7. The boost, badge-port and Qwiic rows cannot be checked here.
+Runs today, unmodified. **Mirroring never touches PSRAM** (§3.4: 230 KB double-buffered in
+SRAM), so the Feather covers the entire primary mode on the right silicon.
 
-**A5. Optional: prototype the pillarbox bezel** (§3.4). Pure output-side work, and it will
-tell you quickly whether the idea looks as good as it sounds.
+**A1. Scale-during-scanout.** 240×240 source in SRAM, HSTX doing horizontal doubling, DMA
+re-reading each source line vertically, per-line descriptor table for the circular mask and
+pillarbox. Feed it a static test image — ideally a real badge screenshot. Measure actual
+core load against §3.4's estimated 2–5%. **This validates the whole mirroring architecture.**
 
-#### Part B — badge required
+**A2. Pin-map validation.** Bring up §4.1's allocation on real RP2350A silicon: SPI0 as
+slave, SPI1 on `{8,9,10,11}`, I2C0 as target, I2C1 for Qwiic, DDC on PIO. This is the test
+the Metro cannot do, and the reason the Feather is the primary bench.
 
-**B1. `display.get_fps()` across a handful of real apps.** Badge only, no hexpansion needed.
-If it comes in around 15 fps the link has enormous headroom and the mirror design gets
-simpler; near 40 and dirty-rect support moves into v1. **This is the number that bounds the
-whole primary mode.**
+**A3. 640×480 @60 DVI output.** Confirm the timings and that real monitors accept the
+signal — §3.3 puts it at 84% of the HSTX rating; check that holds in practice.
 
-**B2. Prototype `display.get_fb()`** against a local firmware build, so the upstream ask in
-§3.2 arrives as a tested patch rather than a feature request. If you also want drawlist
-forwarding, prototype the drawlist capture hook here — one conversation upstream, two hooks.
+**A4. Current draw** under load, validating the first rows of §4.7. The boost, badge-port
+and Qwiic rows cannot be checked here.
 
-**B3. SPI link speed.** Sweep 10→40 MHz over the HS pins through the protoboard hexpansion
+**A5. Optional: the pillarbox bezel** (§3.4), and Qwiic + SWD bring-up.
+
+#### Part B — Metro, the PSRAM and SD bench
+
+**B1. ctx rasterisation at 640×480 — the highest-value single measurement.** ctx is portable
+single-header C; build it under the Pico SDK, feed it a drawlist representative of a real
+badge app, record milliseconds per frame for a typical scene and a worst case. **Settles
+risk 17 and decides the shape of §3.2.** A 614 KB 16 bpp target does not fit in 520 KB of
+SRAM, which is why this needs the Metro's PSRAM.
+
+*Alternative on the Feather:* rasterise at **8 bpp palette** — 307 KB, fits in SRAM, and is
+already a listed mode in §3.3, so the number is directly useful rather than a proxy.
+
+**B2. microSD** on SPI, and PSRAM-backed 640×480 16 bpp scanout — the mode §3.3 rates
+"Medium, needs measurement".
+
+**B3. The RP2350B experiment.** Run the same firmware on both boards. If the A map brings up
+cleanly on the Feather, stay with the A; the B is the fallback, not the plan (§4.1).
+
+A1 and B1 are the two highest-value tests and use different boards, so they run in parallel.
+
+#### Part C — badge required
+
+**C1. `display.get_fps()` across a handful of real apps.** Badge only, no hexpansion needed.
+Around 15 fps means the link has enormous headroom and the mirror design gets simpler; near
+40 and dirty-rect support moves into v1. **This bounds the whole primary mode.**
+
+**C2. Prototype `display.get_fb()`** against a local firmware build, so the upstream ask in
+§3.1 arrives as a tested patch. If you also want drawlist forwarding, prototype the capture
+hook here — one conversation upstream, two hooks.
+
+**C3. SPI link speed.** Sweep 10→40 MHz over the HS pins through the protoboard hexpansion
 with the real edge connector in circuit. Record the highest reliable rate, then push a real
 115,200-byte frame and time it end to end.
 
-**B4. EEPROM emulation enumerates reliably.** Cold-plug 50 times. Measure worst-case time
-from port power-on to the badge's first I2C read, against the RP2350's time-to-I2C-ready. If
-there is no clear daylight between them, §5's fallback becomes the primary plan and the
-schematic changes.
+**C4. EEPROM emulation enumerates reliably.** Cold-plug 50 times. Measure worst-case time
+from port power-on to the badge's first I2C read against the RP2350's time-to-I2C-ready. If
+there is no clear daylight, §5's fallback becomes the primary plan and the schematic changes.
 
 #### What the bench cannot tell you
 
-* **The pin budget.** The Metro is an RP2350**B** with 37 GPIO; the hexpansion specs an
-  RP2350**A** with 30, and §4.1 is tight precisely because of that — the SD card was forced
-  onto SPI1 `{8,9,10,11}` as the only group left. **Anything that works on the Metro must be
-  re-checked against §4.1 before it means anything for the board.**
+* **PSRAM on an RP2350A** — see above; populating the Feather's footprint closes this.
 * **Signal integrity.** Adafruit's adapter has its own buffering; our board direct-drives
   from GPIO. Functional results transfer, SI results do not.
 * **The backfeed test (§4.5)** needs the real power topology and moves to Phase 2.
+* **The layout.** No bench board answers whether the outer flat closes (§4.4).
 
 Everything downstream is cheap to change now and expensive to change later. Do not skip
 this phase.
@@ -1005,6 +1038,7 @@ primary mode.
 | 15 | VID/PID not assigned in time | Low | Ask in week 1; costs nothing. |
 | 16 | RP2350-E9 pull-down erratum bites on LS/CS/I2C lines | Low | External pull resistors everywhere it matters. |
 | 17 | ctx drawlist forwarding proves impractical — second firmware hook refused, or 640×480 rasterisation too slow on RP2350 | Low | **Settled by Phase 0 A1**, which needs only the Metro. Affects the advanced path only; v1 mirroring depends on none of it. Fallback is the bespoke command set in §3.2, which is already specified. |
+| 18 | PSRAM CS on GPIO0 (QMI CS1, RP2350A) is unvalidated — the Feather has no PSRAM, the Metro is a B with CS on GPIO47 | Low | Documented pinmux option, not exotic. Closed by populating the Feather's unpopulated PSRAM footprint with an APS6404L (~$1.15) in Phase 0. |
 
 ---
 
@@ -1021,6 +1055,7 @@ primary mode.
 | LEDs | **Power (always on) + status on GPIO1**, plus an optional SK6805 RGB. |
 | Qwiic | **Two JST-SH 4-pin sockets in parallel** on hardware I2C1 (GPIO6/7), with jumper-removable 4k7 pull-ups. Both on side flat A. |
 | Badge power | **The hexpansion never powers the badge** — not in normal use, not during hot-plug, not under a single-component failure. Enforced by the TPS2116 mux and firmware tri-stating, not by convention. |
+| MCU variant | **RP2350A (QFN-60).** The B halves the pin pressure but doubles package area on a board with no slack, and adds no peripherals. Recorded as the fallback, proven either way on the bench in Phase 0. |
 | Board size | **44 mm across flats** (was the 32 mm template). Smallest size where mini-HDMI and USB-C fit on the outer flat. Costs ~$2/board. |
 | microSD | **Back in**, on SPI1 GPIO8–11, on the second side flat. First thing to cut if the placement study fails. |
 
